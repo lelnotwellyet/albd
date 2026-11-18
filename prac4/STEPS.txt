@@ -1,0 +1,209 @@
+==============================================================================
+PRACTICAL 4: SCHEMA EVOLUTION WITH KAFKA SCHEMA REGISTRY
+==============================================================================
+
+FILES IN THIS FOLDER (prac4)
+------------------------------
+  docker-compose.yml
+  schema_demo.py
+  STEPS.txt   <- this file
+
+DEPENDENCIES FOR THIS PRACTICAL (check these first, install what is missing)
+----------------------------------------------------------------------------
+[ ] Docker Desktop
+      Check :  docker --version  and  docker ps   (docker ps must NOT give an engine error)
+      Install:  1. PowerShell as administrator:  wsl --install   then restart the PC
+                2. Download Docker Desktop from https://www.docker.com/products/docker-desktop/
+                3. Install with defaults, open it, accept terms, wait until the whale
+                   icon near the clock stops moving.
+      Docker images (Kafka, MySQL, ...) are downloaded AUTOMATICALLY by
+      "docker compose up" - just keep the internet on.
+
+[ ] Python 3.11
+      Check :  python --version       -> Python 3.11.x
+      Install:  https://www.python.org/downloads/  (Windows installer 3.11.x)
+                Tick "Add python.exe to PATH" on the first screen.
+
+[ ] Python libraries: requests
+      Check :  python -c "import requests; print('ok')"
+      Install:  pip install requests
+                (if "No module named ..." still appears:  python -m pip install requests)
+
+[ ] Internet - the Confluent images are large (5-10 minutes first time).
+
+After installing anything: CLOSE VS Code / PowerShell and open it again.
+Full install guide for all practicals: C:\bigdata\00_SETUP_STEPS.txt
+
+Aim: show that Schema Registry accepts a backward compatible schema change and rejects an incompatible one.
+
+IN SIMPLE WORDS
+---------------
+   - A schema is the shape of a message: which fields it has and their types. Here the message is a patient record.
+   - Schema Registry is a small server that stores every version of every schema. Producers and consumers ask it "what does this message look like?"
+   - Schema evolution means the schema changes over time, for example a new field is added.
+   - Backward compatible means: a program using the NEW schema can still read OLD messages. Old messages do not have the new field, so the new field must have a default value.
+   - Rule to remember: adding a field with a default is allowed. Adding a field without a default, or changing a type (int to string), is rejected.
+
+Think of a college form. If the new form adds "Blood group (write 'unknown' if not known)", old forms are still usable. If the new form makes blood group compulsory, all old forms become invalid.
+
+  Version | Change                                     | Result
+  --------+--------------------------------------------+------------------------------
+  V1      | patient_id, patient_name, age, heart_rate  | Registered (first version)
+  V2      | adds blood_pressure with default "unknown" | Accepted: backward compatible
+  V3      | adds blood_group with no default           | Rejected with error 409
+
+STEPS
+-----
+   1. Start Docker Desktop and wait until docker ps works in PowerShell. If practical 3 is still running, stop it first with docker compose down in its folder.
+   2. Make the folder. Run mkdir C:\bigdata\prac4 and open it in VS Code.
+   3. Create two files and paste the code from below. Save both with Ctrl+S.
+      * docker-compose.yml (Code 1)
+      * schema_demo.py (Code 2)
+   4. Start Kafka and Schema Registry.
+
+      docker compose up -d
+
+The first time it downloads two large Confluent images. This can take 5 to 10 minutes.
+   5. Check both containers. Run docker ps. You must see kafka and schema-registry, both "Up". Screenshot it.
+   6. Wait about 30 seconds. Schema Registry starts after Kafka and needs a little time.
+   7. Check the registry is alive. Open http://localhost:8081/subjects in Chrome or Edge. It shows [], an empty list, because no schema is stored yet. If the browser cannot connect, wait 20 seconds and refresh.
+   8. Install the library: pip install requests
+   9. Run the script.
+
+      python schema_demo.py
+
+   10. Read the seven printed steps. Each one is one request to the registry:
+      * Step 1 returns {'id': 1}: V1 is stored.
+      * Step 2 returns {'compatibility': 'BACKWARD'}: the rule is now set.
+      * Step 3 returns {'is_compatible': True}: V2 passes, because its new field has a default.
+      * Step 4 returns {'id': 2}: V2 is stored.
+      * Step 5 returns {'is_compatible': False}: V3 fails, because its new field has no default.
+      * Step 6 prints 409 and a message: the registry refused V3.
+      * Step 7 prints [1, 2]: only two versions exist.
+   11. Confirm in the browser. Open these three addresses and screenshot them:
+      * http://localhost:8081/subjects now shows ["patient-data-value"].
+      * http://localhost:8081/subjects/patient-data-value/versions shows [1,2].
+      * http://localhost:8081/subjects/patient-data-value/versions/2 shows the V2 schema, with blood_pressure and its default inside.
+   12. Try the other incompatible change (optional). In the script, change the V3 line to the one below and run again. Step 5 again prints False, because changing a field's type from int to string also breaks old data.
+
+      v3 = [{"name": "patient_id", "type": "string"}] + v2[1:]
+
+   13. Shut down: docker compose down. This also erases the stored schemas, so the next run starts from an empty registry.
+
+For the journal: docker ps, the script output with all seven steps, and the browser page showing [1,2].
+
+If something goes wrong
+   - ConnectionError or Connection refused from the script: the registry is not ready. Wait until step 7 works in the browser, then run the script again.
+   - docker ps does not show schema-registry: run docker logs schema-registry and read the last lines. Most often Kafka was not ready; run docker compose up -d once more.
+   - Running the script twice gives the same ids and [1, 2]. That is correct: the registry does not store the same schema twice.
+
+CODE 1 (DOCKER-COMPOSE.YML)
+---------------------------
+
+This is the file in your journal: one Kafka broker and one Schema Registry. The registry stores its schemas inside Kafka, which is why Kafka is needed.
+
+      services:
+        kafka:
+          image: confluentinc/cp-kafka:7.6.0
+          hostname: kafka
+          container_name: kafka
+          ports:
+            - "9092:9092"
+          environment:
+            KAFKA_NODE_ID: 1
+            KAFKA_PROCESS_ROLES: broker,controller
+            KAFKA_LISTENERS: PLAINTEXT://kafka:29092,CONTROLLER://kafka:29093,PLAINTEXT_HOST://0.0.0.0:9092
+            KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+            KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+            KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:29093
+            KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+            KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+            KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+            KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+            KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+            CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
+      
+        schema-registry:
+          image: confluentinc/cp-schema-registry:7.6.0
+          hostname: schema-registry
+          container_name: schema-registry
+          depends_on:
+            - kafka
+          ports:
+            - "8081:8081"
+          environment:
+            SCHEMA_REGISTRY_HOST_NAME: schema-registry
+            SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: kafka:29092
+            SCHEMA_REGISTRY_LISTENERS: http://0.0.0.0:8081
+
+CODE 2 (SCHEMA_DEMO.PY), THE EASY VERSION
+-----------------------------------------
+
+Your journal uses five files (two .avsc schema files, a long Python script and two shell scripts). This single file shows the same idea. The schemas are written as Python lists, and each step is one web request to the registry.
+
+      import json, requests
+      
+      URL = "http://localhost:8081"
+      SUBJECT = "patient-data-value"
+      HEAD = {"Content-Type": "application/vnd.schemaregistry.v1+json"}
+      
+      def patient(fields):
+          """Build an Avro schema and wrap it the way Schema Registry wants it."""
+          schema = {"type": "record", "name": "Patient", "fields": fields}
+          return {"schema": json.dumps(schema)}
+      
+      # V1: the first schema
+      v1 = [{"name": "patient_id", "type": "int"},
+            {"name": "patient_name", "type": "string"},
+            {"name": "age", "type": "int"},
+            {"name": "heart_rate", "type": "int"}]
+      
+      # V2: one NEW field WITH a default value  -> backward compatible
+      v2 = v1 + [{"name": "blood_pressure", "type": "string", "default": "unknown"}]
+      
+      # V3: one NEW field WITHOUT a default value -> NOT backward compatible
+      v3 = v2 + [{"name": "blood_group", "type": "string"}]
+      
+      print("1. Register V1")
+      print(requests.post(f"{URL}/subjects/{SUBJECT}/versions", headers=HEAD, json=patient(v1)).json())
+      
+      print("2. Set the rule to BACKWARD")
+      print(requests.put(f"{URL}/config/{SUBJECT}", headers=HEAD, json={"compatibility": "BACKWARD"}).json())
+      
+      print("3. Is V2 compatible?")
+      print(requests.post(f"{URL}/compatibility/subjects/{SUBJECT}/versions/latest", headers=HEAD, json=patient(v2)).json())
+      
+      print("4. Register V2")
+      print(requests.post(f"{URL}/subjects/{SUBJECT}/versions", headers=HEAD, json=patient(v2)).json())
+      
+      print("5. Is V3 compatible?")
+      print(requests.post(f"{URL}/compatibility/subjects/{SUBJECT}/versions/latest", headers=HEAD, json=patient(v3)).json())
+      
+      print("6. Try to register V3 (must be rejected)")
+      r = requests.post(f"{URL}/subjects/{SUBJECT}/versions", headers=HEAD, json=patient(v3))
+      print(r.status_code, r.json().get("message", "")[:80])
+      
+      print("7. Versions stored in the registry")
+      print(requests.get(f"{URL}/subjects/{SUBJECT}/versions").json())
+
+OUTPUT YOU SHOULD SEE
+---------------------
+
+      1. Register V1
+      {'id': 1}
+      2. Set the rule to BACKWARD
+      {'compatibility': 'BACKWARD'}
+      3. Is V2 compatible?
+      {'is_compatible': True}
+      4. Register V2
+      {'id': 2}
+      5. Is V3 compatible?
+      {'is_compatible': False}
+      6. Try to register V3 (must be rejected)
+      409 Schema being registered is incompatible with an earlier schema ...
+      7. Versions stored in the registry
+      [1, 2]
+
+Only versions 1 and 2 are stored, which matches your journal output. The last part of your journal (codes 4 and 5) goes one step further: it sends two real patient records to Kafka using the V2 schema and reads them back with kafka-avro-console-producer and kafka-avro-console-consumer.
+
+I checked this script only for syntax; it needs the Docker containers to run, which I do not have here.

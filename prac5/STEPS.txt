@@ -1,0 +1,178 @@
+==============================================================================
+PRACTICAL 5: SPARK STRUCTURED STREAMING WORD COUNT
+==============================================================================
+
+FILES IN THIS FOLDER (prac5)
+------------------------------
+  socket_sender.py
+  word_count_stream.py
+  STEPS.txt   <- this file
+
+DEPENDENCIES FOR THIS PRACTICAL (check these first, install what is missing)
+----------------------------------------------------------------------------
+[ ] Python 3.11
+      Check :  python --version       -> Python 3.11.x
+      Install:  https://www.python.org/downloads/  (Windows installer 3.11.x)
+                Tick "Add python.exe to PATH" on the first screen.
+
+[ ] Java 17 (JDK)
+      Check :  java -version          -> must say  openjdk version "17...."
+               echo $env:JAVA_HOME    -> must point to the JDK 17 folder
+      Install:  download "Temurin 17 (LTS)" .msi from https://adoptium.net
+                During install switch ON "Set JAVA_HOME variable".
+      If java -version shows another version (e.g. 21 or 25 from Android Studio),
+      set JAVA_HOME to JDK 17 for the current terminal:
+               $env:JAVA_HOME="C:\Program Files\Eclipse Adoptium\jdk-17.x.x-hotspot"
+               $env:Path="$env:JAVA_HOME\bin;$env:Path"
+      (use the real folder name you see inside C:\Program Files\Eclipse Adoptium)
+
+[ ] Python libraries: pyspark
+      Check :  python -c "import pyspark; print(pyspark.__version__)"
+      Install:  pip install pyspark
+                (if "No module named ..." still appears:  python -m pip install pyspark)
+
+[ ] winutils + hadoop.dll (Windows only - needed to WRITE files with Spark)
+      Check :  echo $env:HADOOP_HOME  -> must print C:\hadoop
+               dir C:\hadoop\bin     -> must list winutils.exe and hadoop.dll
+      Install:  1. Open https://github.com/cdarlint/winutils -> newest hadoop-3.3.x -> bin
+                2. Download winutils.exe and hadoop.dll into C:\hadoop\bin
+                3. PowerShell:  setx HADOOP_HOME C:\hadoop
+                4. Add C:\hadoop\bin to PATH (Windows key > "environment variables"
+                   > Environment Variables > Path > Edit > New), then reopen VS Code.
+
+After installing anything: CLOSE VS Code / PowerShell and open it again.
+Full install guide for all practicals: C:\bigdata\00_SETUP_STEPS.txt
+
+Aim: count words that you type live, using Spark Structured Streaming reading from a socket.
+
+IN SIMPLE WORDS
+---------------
+   - Batch processing works on data that is already complete. Streaming works on data that keeps arriving.
+   - A socket is a simple connection between two programs on a port number. Here one terminal types lines on port 9999 and Spark listens on port 9999.
+   - Spark treats the stream as a table that keeps growing. Each new line is a new row. Spark re-runs the count on every new batch of rows.
+   - Output mode "complete" means: print the full table of counts every time, not only the changed rows.
+
+STEPS
+-----
+   1. Make the folder. Run mkdir C:\bigdata\prac5 and open it in VS Code.
+   2. Create two files and paste the code from below. Save both with Ctrl+S.
+      * socket_sender.py (Code 1): the program you type words into.
+      * word_count_stream.py (Code 2): the Spark program that counts them.
+   3. Open two terminals in VS Code: Terminal > New Terminal, then the + icon for the second. Terminal 1 is the sender, terminal 2 is Spark.
+   4. Terminal 1: start the sender first.
+
+      python socket_sender.py
+
+It prints Waiting for Spark to connect on port 9999... and waits. If Windows Firewall asks about Python, click Allow access.
+   5. Terminal 2: start Spark.
+
+      python word_count_stream.py
+
+   6. Watch both terminals. Within a few seconds terminal 1 prints Spark connected! and shows Enter message:. After 10 to 20 seconds terminal 2 prints Batch: 0 with an empty table. Wait for both before typing.
+   7. Type the first line. Click in terminal 1, type hello spark, press Enter.
+   8. Watch terminal 2. Within a few seconds Batch: 1 prints with hello 1 and spark 1.
+   9. Type the second line. In terminal 1 type hello big data and press Enter. Batch: 2 prints, and hello is now 2. Spark remembered the old count and added to it. This remembered count is the streaming state.
+   10. Type a few more lines of your own, repeating some words, and watch the counts grow. The rows are not in a fixed order; that is normal.
+   11. Take screenshots of terminal 1 (the lines you typed) and terminal 2 (the batches).
+   12. Stop in this order. Type exit in terminal 1 to close the sender. Then press Ctrl+C in terminal 2 to stop Spark. The long error text Spark prints at the end is normal.
+
+For the journal: both terminals side by side. To put them side by side, use the split icon next to the + in the terminal panel.
+
+If something goes wrong
+   - Connection refused in terminal 2: Spark was started before the sender. Start socket_sender.py first, then Spark.
+   - Only one usage of each socket address in terminal 1: an old sender is still running on port 9999. Close the old terminal with the bin icon and try again.
+   - HADOOP_HOME and hadoop.home.dir are unset, or an error about winutils or chmod: redo setup step 8, then close and reopen VS Code.
+   - Nothing happens after typing: check you pressed Enter, and that you typed in terminal 1, not terminal 2.
+   - An empty word with a count appears: you typed two spaces together. The code splits on every single space.
+
+CODE 1 (SOCKET_SENDER.PY)
+-------------------------
+
+Windows has no built-in tool to send text to a port, so this small Python program does it. It is a shorter version of the one in your journal.
+
+      import socket
+      
+      # Open port 9999 and wait for Spark to connect
+      server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+      server.bind(("localhost", 9999))
+      server.listen(1)
+      print("Waiting for Spark to connect on port 9999...")
+      
+      conn, address = server.accept()
+      print("Spark connected! Type a line and press Enter. Type exit to stop.")
+      
+      while True:
+          message = input("Enter message: ")
+          if message.lower() == "exit":
+              break
+          conn.sendall((message + "\n").encode("utf-8"))   # send the line to Spark
+      
+      conn.close()
+      server.close()
+      print("Sender stopped.")
+
+CODE 2 (WORD_COUNT_STREAM.PY)
+-----------------------------
+
+      import os
+      import tempfile
+      
+      # Windows: give Spark a temp folder it is allowed to write to
+      os.makedirs(r"C:\bigdata\prac5\spark-temp", exist_ok=True)
+      tempfile.tempdir = r"C:\bigdata\prac5\spark-temp"
+      
+      from pyspark.sql import SparkSession
+      from pyspark.sql.functions import explode, split
+      
+      # local[2] = 2 threads: one to receive data, one to process it
+      spark = (SparkSession.builder.master("local[2]").appName("WordCount")
+               .config("spark.sql.shuffle.partitions", "2")   # makes each batch fast
+               .config("spark.hadoop.fs.permissions.umask-mode", "000")
+               .getOrCreate())
+      spark.sparkContext.setLogLevel("ERROR")
+      
+      # 1. Read lines from the socket. Each line arrives in a column called "value"
+      lines = (spark.readStream.format("socket")
+               .option("host", "localhost").option("port", 9999).load())
+      
+      # 2. split cuts the line into words, explode puts each word on its own row
+      words = lines.select(explode(split(lines.value, " ")).alias("word"))
+      
+      # 3. Count how many times each word came
+      counts = words.groupBy("word").count()
+      
+      # 4. Print the full result on the console after every batch
+      query = counts.writeStream.outputMode("complete").format("console").start()
+      
+      query.awaitTermination()   # keep running until Ctrl+C
+
+WHAT CHANGED FROM YOUR JOURNAL CODE
+-----------------------------------
+   - The temp folder is C:\bigdata\prac5\spark-temp in place of D:\prac5\spark-temp, so it works on a PC without a D: drive.
+   - spark.sql.shuffle.partitions is set to 2. Without it Spark uses 200 partitions and each batch took about 20 seconds when I tested.
+   - socket_sender.py is shorter, with the same behaviour.
+
+OUTPUT YOU SHOULD SEE
+---------------------
+
+I ran this code with the two lines above. hello goes from 1 to 2 because it was typed twice.
+
+      Batch: 1
+      +-----+-----+
+      | word|count|
+      +-----+-----+
+      |hello|    1|
+      |spark|    1|
+      +-----+-----+
+      
+      Batch: 2
+      +-----+-----+
+      | word|count|
+      +-----+-----+
+      |hello|    2|
+      |spark|    1|
+      |  big|    1|
+      | data|    1|
+      +-----+-----+
+
+I tested the Spark part on Linux, not on Windows. The Windows temp-folder lines come from your journal, where they ran.

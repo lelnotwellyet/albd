@@ -1,0 +1,221 @@
+==============================================================================
+PRACTICAL 3: KAFKA CLUSTER WITH 3 BROKERS
+==============================================================================
+
+FILES IN THIS FOLDER (prac3)
+------------------------------
+  docker-compose.yml
+  producer.py
+  consumer.py
+  STEPS.txt   <- this file
+
+DEPENDENCIES FOR THIS PRACTICAL (check these first, install what is missing)
+----------------------------------------------------------------------------
+[ ] Docker Desktop
+      Check :  docker --version  and  docker ps   (docker ps must NOT give an engine error)
+      Install:  1. PowerShell as administrator:  wsl --install   then restart the PC
+                2. Download Docker Desktop from https://www.docker.com/products/docker-desktop/
+                3. Install with defaults, open it, accept terms, wait until the whale
+                   icon near the clock stops moving.
+      Docker images (Kafka, MySQL, ...) are downloaded AUTOMATICALLY by
+      "docker compose up" - just keep the internet on.
+
+[ ] Python 3.11
+      Check :  python --version       -> Python 3.11.x
+      Install:  https://www.python.org/downloads/  (Windows installer 3.11.x)
+                Tick "Add python.exe to PATH" on the first screen.
+
+[ ] Python libraries: kafka-python
+      Check :  python -c "import kafka; print('ok')"
+      Install:  pip install kafka-python
+                (if "No module named ..." still appears:  python -m pip install kafka-python)
+
+After installing anything: CLOSE VS Code / PowerShell and open it again.
+Full install guide for all practicals: C:\bigdata\00_SETUP_STEPS.txt
+
+Aim: start three Kafka brokers with Docker, then send messages with a Python producer and read them with a Python consumer.
+
+IN SIMPLE WORDS
+---------------
+   - Kafka is a message pipeline. One program writes messages, another reads them, and Kafka sits in the middle and stores them.
+   - Broker = one Kafka server. Three brokers together = a cluster. If one broker dies, the other two still have the data.
+   - Topic = a named channel, here student-events. A topic is cut into partitions; each message gets a running number called the offset.
+   - Producer = the program that sends. Consumer = the program that reads.
+   - KRaft = the brokers choose their own leader. No ZooKeeper is needed. That is why each broker has the role broker,controller.
+
+Think of WhatsApp: the producer sends, the group is the topic, the consumer is a member reading, and the brokers are the servers holding the chat.
+
+STEPS
+-----
+   1. Start Docker Desktop. Open it from the Start menu and wait until the whale icon near the clock stops moving. Confirm in PowerShell with docker ps: it must print a header line, not an error about the Docker engine.
+   2. Make the folder. Run mkdir C:\bigdata\prac3 and open it in VS Code.
+   3. Create three files in that folder and paste the matching code from below into each. Save each with Ctrl+S.
+      * docker-compose.yml (Code 1). In YAML the spaces at the start of each line matter. Paste it exactly and do not use tabs.
+      * producer.py (Code 2)
+      * consumer.py (Code 3)
+   4. Start the cluster. In the VS Code terminal run:
+
+      docker compose up -d
+
+The first time it downloads the Kafka image, which takes a few minutes. -d means "run in the background". It ends with three lines: Container kafka1 Started, kafka2 Started, kafka3 Started.
+   5. Check all three brokers are running.
+
+      docker ps
+
+You must see three rows named kafka1, kafka2, kafka3, each with STATUS "Up". Take a screenshot (Windows key + Shift + S). This is the proof of the 3-broker cluster.
+   6. Wait 30 seconds. The brokers need this time to elect a leader among themselves.
+   7. Install the Python Kafka library: pip install kafka-python
+   8. Terminal 1: start the consumer.
+
+      python consumer.py
+
+It prints Consumer started... waiting for messages and then waits. Leave it running.
+   9. Open a second terminal with the + icon in the terminal panel.
+   10. Terminal 2: start the producer.
+
+      python producer.py
+
+It prints one Produced: {...} line every second, ten in total, then ends by itself.
+   11. Watch terminal 1. Each message appears there as Received: {...} | Partition: 0 | Offset: 0, with the offset going up by one each time. The offset is the message's position number inside the partition.
+   12. Take screenshots of terminal 2 (ten Produced lines) and terminal 1 (the Received lines).
+   13. Stop the consumer. Click in terminal 1 and press Ctrl+C. The error text that prints on Ctrl+C is normal.
+   14. Prove the replication (optional but good for viva). Run the two docker exec commands shown under "Output you should see". The second one prints, for each partition, a Leader and Replicas: 1,2,3. That means every message is copied to all three brokers.
+   15. Shut everything down:
+
+      docker compose down
+
+For the journal: docker ps with three brokers, the producer terminal, the consumer terminal.
+
+If something goes wrong
+   - NoBrokersAvailable: the brokers are not ready or Docker is not running. Check docker ps, wait 30 seconds, run again.
+   - A broker is missing from docker ps: run docker logs kafka1 (or kafka2, kafka3) and read the last lines for the reason.
+   - port is already allocated: an older Kafka container is still running. Run docker compose down, then docker ps to confirm nothing is left, and start again.
+   - The consumer prints nothing on a second run: it already read those messages, because Kafka remembers the position of each group_id. Run the producer again to send new ones.
+
+CODE 1 (DOCKER-COMPOSE.YML)
+---------------------------
+
+All three brokers are the same except three things: the name, the node id, and the port on your Mac (29092, 39092, 49092).
+
+      services:
+        kafka1:
+          image: bitnamilegacy/kafka:3.7
+          container_name: kafka1
+          ports:
+            - "29092:29092"
+          environment:
+            - KAFKA_KRAFT_CLUSTER_ID=abcdefghijklmnopqrstuv
+            - KAFKA_CFG_NODE_ID=1
+            - KAFKA_CFG_PROCESS_ROLES=broker,controller
+            - KAFKA_CFG_CONTROLLER_QUORUM_VOTERS=1@kafka1:9093,2@kafka2:9093,3@kafka3:9093
+            - KAFKA_CFG_LISTENERS=PLAINTEXT://:9092,CONTROLLER://:9093,EXTERNAL://:29092
+            - KAFKA_CFG_ADVERTISED_LISTENERS=PLAINTEXT://kafka1:9092,EXTERNAL://localhost:29092
+            - KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP=PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT,EXTERNAL:PLAINTEXT
+            - KAFKA_CFG_CONTROLLER_LISTENER_NAMES=CONTROLLER
+            - KAFKA_CFG_INTER_BROKER_LISTENER_NAME=PLAINTEXT
+            - KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE=true
+      
+        kafka2:
+          image: bitnamilegacy/kafka:3.7
+          container_name: kafka2
+          ports:
+            - "39092:29092"
+          environment:
+            - KAFKA_KRAFT_CLUSTER_ID=abcdefghijklmnopqrstuv
+            - KAFKA_CFG_NODE_ID=2
+            - KAFKA_CFG_PROCESS_ROLES=broker,controller
+            - KAFKA_CFG_CONTROLLER_QUORUM_VOTERS=1@kafka1:9093,2@kafka2:9093,3@kafka3:9093
+            - KAFKA_CFG_LISTENERS=PLAINTEXT://:9092,CONTROLLER://:9093,EXTERNAL://:29092
+            - KAFKA_CFG_ADVERTISED_LISTENERS=PLAINTEXT://kafka2:9092,EXTERNAL://localhost:39092
+            - KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP=PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT,EXTERNAL:PLAINTEXT
+            - KAFKA_CFG_CONTROLLER_LISTENER_NAMES=CONTROLLER
+            - KAFKA_CFG_INTER_BROKER_LISTENER_NAME=PLAINTEXT
+            - KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE=true
+      
+        kafka3:
+          image: bitnamilegacy/kafka:3.7
+          container_name: kafka3
+          ports:
+            - "49092:29092"
+          environment:
+            - KAFKA_KRAFT_CLUSTER_ID=abcdefghijklmnopqrstuv
+            - KAFKA_CFG_NODE_ID=3
+            - KAFKA_CFG_PROCESS_ROLES=broker,controller
+            - KAFKA_CFG_CONTROLLER_QUORUM_VOTERS=1@kafka1:9093,2@kafka2:9093,3@kafka3:9093
+            - KAFKA_CFG_LISTENERS=PLAINTEXT://:9092,CONTROLLER://:9093,EXTERNAL://:29092
+            - KAFKA_CFG_ADVERTISED_LISTENERS=PLAINTEXT://kafka3:9092,EXTERNAL://localhost:49092
+            - KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP=PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT,EXTERNAL:PLAINTEXT
+            - KAFKA_CFG_CONTROLLER_LISTENER_NAMES=CONTROLLER
+            - KAFKA_CFG_INTER_BROKER_LISTENER_NAME=PLAINTEXT
+            - KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE=true
+
+Two differences from your journal file:
+   - The image is bitnamilegacy/kafka:3.7, not bitnami/kafka:3.7. Bitnami moved its free images to the bitnamilegacy catalog in 2025, so the old name may fail to download on a new machine (source). If bitnami/kafka:3.7 is already downloaded on the lab PC, it still works there.
+   - I added KAFKA_KRAFT_CLUSTER_ID so all three brokers surely join the same cluster. I also left out the volumes lines, so each run starts clean.
+
+HOW TO READ THE IMPORTANT LINES
+-------------------------------
+
+  Setting                         | Meaning
+  --------------------------------+----------------------------------------------------------------------------------------
+  NODE_ID                         | The broker's roll number: 1, 2 or 3
+  PROCESS_ROLES=broker,controller | This server stores data and also helps manage the cluster
+  CONTROLLER_QUORUM_VOTERS        | The list of all three servers that vote for a leader
+  LISTENERS                       | The doors the broker opens: 9092 for other brokers, 9093 for voting, 29092 for your Mac
+  ADVERTISED_LISTENERS            | The address the broker tells clients to use: localhost:29092 from your Mac
+  ports: "39092:29092"            | Port 39092 on your Mac goes to port 29092 inside the container
+
+CODE 2 (PRODUCER.PY)
+--------------------
+
+      from kafka import KafkaProducer
+      import json, time
+      
+      # Connect to all 3 brokers. json.dumps turns a dict into text, encode turns text into bytes
+      producer = KafkaProducer(
+          bootstrap_servers=["localhost:29092", "localhost:39092", "localhost:49092"],
+          value_serializer=lambda v: json.dumps(v).encode("utf-8"))
+      
+      for i in range(10):
+          message = {"student_id": i + 1,
+                     "name": f"Student-{i + 1}",
+                     "course": "Data Science",
+                     "message": f"Hello from student {i + 1}"}
+          producer.send("student-events", value=message)   # send to the topic
+          print("Produced:", message)
+          time.sleep(1)
+      
+      producer.flush()   # make sure everything is really sent
+      producer.close()
+
+CODE 3 (CONSUMER.PY)
+--------------------
+
+      from kafka import KafkaConsumer
+      import json
+      
+      consumer = KafkaConsumer(
+          "student-events",                                  # topic to read
+          bootstrap_servers=["localhost:29092", "localhost:39092", "localhost:49092"],
+          auto_offset_reset="earliest",                      # start from the first message
+          group_id="student-consumer-group",
+          value_deserializer=lambda x: json.loads(x.decode("utf-8")))
+      
+      print("Consumer started... waiting for messages")
+      for message in consumer:
+          print("Received:", message.value,
+                "| Partition:", message.partition,
+                "| Offset:", message.offset)
+
+OUTPUT YOU SHOULD SEE
+---------------------
+
+Terminal 2 prints ten Produced: {...} lines. Terminal 1 prints the same ten messages as Received: {...} | Partition: 0 | Offset: 0, then offset 1, 2, and so on up to 9. Stop the consumer with Ctrl+C.
+
+To prove it is a real 3-broker cluster, run this and show that Replicas lists three brokers:
+
+      docker exec kafka1 kafka-topics.sh --bootstrap-server kafka1:9092 --create --topic demo --partitions 3 --replication-factor 3
+      
+      docker exec kafka1 kafka-topics.sh --bootstrap-server kafka1:9092 --describe --topic demo
+
+I could not run Docker in my environment, so this practical is not test-run by me; the producer and consumer are exactly your journal's code.

@@ -1,0 +1,165 @@
+==============================================================================
+PRACTICAL 2: DELTA LAKE (ACID TRANSACTIONS AND TIME TRAVEL)
+==============================================================================
+
+FILES IN THIS FOLDER (prac2)
+------------------------------
+  delta_demo.py
+  STEPS.txt   <- this file
+
+DEPENDENCIES FOR THIS PRACTICAL (check these first, install what is missing)
+----------------------------------------------------------------------------
+[ ] Python 3.11
+      Check :  python --version       -> Python 3.11.x
+      Install:  https://www.python.org/downloads/  (Windows installer 3.11.x)
+                Tick "Add python.exe to PATH" on the first screen.
+
+[ ] Java 17 (JDK)
+      Check :  java -version          -> must say  openjdk version "17...."
+               echo $env:JAVA_HOME    -> must point to the JDK 17 folder
+      Install:  download "Temurin 17 (LTS)" .msi from https://adoptium.net
+                During install switch ON "Set JAVA_HOME variable".
+      If java -version shows another version (e.g. 21 or 25 from Android Studio),
+      set JAVA_HOME to JDK 17 for the current terminal:
+               $env:JAVA_HOME="C:\Program Files\Eclipse Adoptium\jdk-17.x.x-hotspot"
+               $env:Path="$env:JAVA_HOME\bin;$env:Path"
+      (use the real folder name you see inside C:\Program Files\Eclipse Adoptium)
+
+[ ] Python libraries: pyspark delta-spark
+      Check :  pip show delta-spark
+      Install:  pip install pyspark delta-spark
+                (if "No module named ..." still appears:  python -m pip install pyspark delta-spark)
+
+[ ] winutils + hadoop.dll (Windows only - needed to WRITE files with Spark)
+      Check :  echo $env:HADOOP_HOME  -> must print C:\hadoop
+               dir C:\hadoop\bin     -> must list winutils.exe and hadoop.dll
+      Install:  1. Open https://github.com/cdarlint/winutils -> newest hadoop-3.3.x -> bin
+                2. Download winutils.exe and hadoop.dll into C:\hadoop\bin
+                3. PowerShell:  setx HADOOP_HOME C:\hadoop
+                4. Add C:\hadoop\bin to PATH (Windows key > "environment variables"
+                   > Environment Variables > Path > Edit > New), then reopen VS Code.
+
+[ ] Internet on first run - Spark downloads the Delta Lake jar files itself.
+
+After installing anything: CLOSE VS Code / PowerShell and open it again.
+Full install guide for all practicals: C:\bigdata\00_SETUP_STEPS.txt
+
+Aim: create a Delta Lake table in Spark, change it, and read the old version back.
+
+IN SIMPLE WORDS
+---------------
+   - A normal data lake is just files (Parquet, CSV). If a job fails halfway, the files are left half written.
+   - Delta Lake stores the same Parquet files plus a folder called _delta_log. This log is a diary: every change (write, update, delete) is written there as a new numbered version.
+   - ACID means a change is safe. Atomic: the whole change happens or none of it. Consistent: data stays valid. Isolated: two jobs do not disturb each other. Durable: once saved, it stays saved.
+   - Time travel means reading the table as it was at an older version. It works because old files are kept and the log knows which files belonged to which version.
+
+It is like version history in Google Docs: you can always open yesterday's copy.
+
+STEPS
+-----
+   1. Install Delta Lake. In PowerShell run pip install delta-spark. It installs a matching PySpark with it. Check with pip show delta-spark, which must print a version.
+   2. Check winutils is set up (setup step 8). In a new PowerShell window, echo $env:HADOOP_HOME must print C:\hadoop. Without it, writing the Delta table fails on Windows.
+   3. Make the folder. Run mkdir C:\bigdata\prac2 and open it in VS Code with File > Open Folder.
+   4. Create the file. New File, name it delta_demo.py, paste the code below, save with Ctrl+S.
+   5. Check the internet is on. The first run downloads the Delta jar files from the internet.
+   6. Run it in the VS Code terminal:
+
+      python delta_demo.py
+
+   7. First run only: for about a minute you see many lines like downloading https://repo1.maven.org/... delta-spark... and a small table of "modules". This is Spark fetching Delta. It is not an error. Later runs skip it.
+   8. Read the four outputs in the order they print:
+      * Version 0: table created: six students. Nikita has 75.
+      * Version 1: after UPDATE: the same six students. Nikita now has 80.
+      * TIME TRAVEL: reading version 0 again: Nikita shows 75 again, although the table now holds 80.
+      * History of the table: two rows, version 0 with operation WRITE and version 1 with operation UPDATE.
+   9. Look at the files Delta made. In the VS Code Explorer a new folder delta-students has appeared. Expand it:
+      * The .parquet files hold the actual rows.
+      * The _delta_log folder holds one .json file per version: 00000000000000000000.json and 00000000000000000001.json.
+   10. Open the two log files. Click each .json file. In the first you find "operation":"WRITE", in the second "operation":"UPDATE". This log is how Delta gives ACID and time travel. Screenshot one of them.
+   11. Same check from the terminal (optional): dir delta-students\_delta_log
+   12. Try one more change yourself (optional). Add these lines before spark.stop() and run again. The history gets a DELETE row.
+
+      dt.delete("marks < 80")
+      dt.history().select("version", "operation").show()
+
+   13. Running again. Each run adds new versions to the same table, so the history grows longer. For a clean run that starts at version 0, delete the folder first: Remove-Item -Recurse delta-students.
+
+For the journal: the terminal output with the four parts, and the _delta_log folder in the Explorer.
+
+If something goes wrong
+   - HADOOP_HOME and hadoop.home.dir are unset or Could not locate winutils.exe: redo setup step 8, then close and reopen VS Code.
+   - UnsatisfiedLinkError ... NativeIO$Windows.access0: hadoop.dll is missing. Put it in C:\hadoop\bin next to winutils.exe, and check C:\hadoop\bin is on PATH.
+   - Python worker failed to connect back: add these lines at the very top of the script, as your journal does:
+
+      import os, sys
+      os.environ["PYSPARK_PYTHON"] = sys.executable
+      os.environ["PYSPARK_DRIVER_PYTHON"] = sys.executable
+
+   - ModuleNotFoundError: No module named 'delta': run python -m pip install delta-spark.
+   - unresolved dependency: io.delta#delta-spark: the jar download failed. Check the internet connection and run again.
+
+EASY CODE (DELTA_DEMO.PY)
+-------------------------
+
+      from pyspark.sql import SparkSession
+      from delta import configure_spark_with_delta_pip, DeltaTable
+      
+      # Start Spark with Delta Lake switched on
+      builder = (SparkSession.builder.appName("DeltaDemo").master("local[*]")
+          .config("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension")
+          .config("spark.sql.catalog.spark_catalog",
+                  "org.apache.spark.sql.delta.catalog.DeltaCatalog"))
+      spark = configure_spark_with_delta_pip(builder).getOrCreate()
+      spark.sparkContext.setLogLevel("ERROR")
+      
+      path = "delta-students"          # folder where the table is saved
+      
+      # 1. Create the table  -> this is VERSION 0
+      data = [(1, "Siddhant", 90), (2, "Shreya", 88), (3, "Shruti", 75),
+              (4, "Chinmay", 90), (5, "Vishnu", 88), (6, "Nikita", 75)]
+      df = spark.createDataFrame(data, ["id", "name", "marks"])
+      df.write.format("delta").mode("overwrite").save(path)
+      print("Version 0: table created")
+      spark.read.format("delta").load(path).orderBy("id").show()
+      
+      # 2. ACID transaction: update one row  -> this is VERSION 1
+      dt = DeltaTable.forPath(spark, path)
+      dt.update("name = 'Nikita'", {"marks": "80"})
+      print("Version 1: after UPDATE")
+      spark.read.format("delta").load(path).orderBy("id").show()
+      
+      # 3. Time travel: read the table as it was at version 0
+      print("TIME TRAVEL: reading version 0 again")
+      spark.read.format("delta").option("versionAsOf", 0).load(path).orderBy("id").show()
+      
+      # 4. History: the list of all versions
+      print("History of the table")
+      dt.history().select("version", "timestamp", "operation").show(truncate=False)
+      
+      spark.stop()
+
+THE FOUR IMPORTANT LINES
+------------------------
+
+  Line                                  | What it does
+  --------------------------------------+------------------------------------------------
+  .write.format("delta")                | Saves as a Delta table instead of plain Parquet
+  dt.update(condition, {column: value}) | Changes rows as one safe transaction
+  .option("versionAsOf", 0)             | Time travel to version 0
+  dt.history()                          | Shows every version and what operation made it
+
+OUTPUT YOU SHOULD SEE
+---------------------
+
+This is the same as your journal screenshots: Nikita has 75 in version 0, 80 after the update, and 75 again when you time travel to version 0. The history table has two rows.
+
+      +-------+-----------------------+---------+
+      |version|timestamp              |operation|
+      +-------+-----------------------+---------+
+      |1      |2026-10-06 15:21:05.72 |UPDATE   |
+      |0      |2026-10-06 15:20:58.351|WRITE    |
+      +-------+-----------------------+---------+
+
+The red "Exception while deleting Spark temp dir" lines at the end of your journal screenshot are a Windows cleanup message that appears after the work is done. They are not an error in the practical.
+
+I could not run this one here because the Delta jar download was blocked in my environment. The code is your journal's code with shorter comments.

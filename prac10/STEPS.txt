@@ -1,0 +1,288 @@
+==============================================================================
+PRACTICAL 10: REAL-TIME DASHBOARD (KAFKA, CLICKHOUSE, GRAFANA)
+==============================================================================
+
+FILES IN THIS FOLDER (prac10)
+------------------------------
+  docker-compose.yml
+  Dockerfile
+  requirements.txt
+  producer.py
+  consumer.py
+  grafana_query.sql
+  STEPS.txt   <- this file
+
+DEPENDENCIES FOR THIS PRACTICAL (check these first, install what is missing)
+----------------------------------------------------------------------------
+[ ] Docker Desktop
+      Check :  docker --version  and  docker ps   (docker ps must NOT give an engine error)
+      Install:  1. PowerShell as administrator:  wsl --install   then restart the PC
+                2. Download Docker Desktop from https://www.docker.com/products/docker-desktop/
+                3. Install with defaults, open it, accept terms, wait until the whale
+                   icon near the clock stops moving.
+      Docker images (Kafka, MySQL, ...) are downloaded AUTOMATICALLY by
+      "docker compose up" - just keep the internet on.
+
+[ ] Nothing else - kafka-python and clickhouse-connect are installed
+      INSIDE the Docker container from requirements.txt by
+      "docker compose up --build". The Grafana ClickHouse plugin is
+      installed automatically too (GF_INSTALL_PLUGINS).
+
+After installing anything: CLOSE VS Code / PowerShell and open it again.
+Full install guide for all practicals: C:\bigdata\00_SETUP_STEPS.txt
+
+Aim: send live air quality readings through Kafka, store them in ClickHouse, and show them on a Grafana dashboard that updates by itself.
+
+IN SIMPLE WORDS
+---------------
+
+This practical joins five small parts into one pipeline. Data moves from left to right:
+   1. Producer (Python): makes a fake air quality reading for a random city every 2 seconds and sends it to Kafka.
+   2. Kafka: carries the messages in a topic called air_quality.
+   3. Consumer (Python): reads each message from Kafka and inserts it as a row into ClickHouse.
+   4. ClickHouse: an OLAP database. OLAP means it is built for fast analysis (average, count, group by) over huge numbers of rows. It stores data column by column, which makes such queries fast.
+   5. Grafana: a dashboard tool. It runs a SQL query on ClickHouse every few seconds and draws the graph.
+
+Kafka is the conveyor belt, ClickHouse is the warehouse, Grafana is the TV screen showing what is in the warehouse.
+
+STEPS
+-----
+
+Part A: start the pipeline
+   1. Start Docker Desktop and confirm docker ps works. Stop any earlier practical with docker compose down in its folder.
+   2. Make the folder. Run mkdir C:\bigdata\prac10 and open it in VS Code.
+   3. Create five files directly inside prac10 and paste the matching code from below:
+      * docker-compose.yml (Code 1)
+      * Dockerfile (Code 2). Capital D, and no extension. In VS Code type the name exactly; do not create it in Notepad, which adds .txt.
+      * requirements.txt (Code 3)
+      * producer.py (Code 4)
+      * consumer.py (Code 5)
+   4. Build and start everything.
+
+      docker compose up --build
+
+--build makes Docker build the small Python container from your Dockerfile. There is no -d this time, so the logs of all five services stay on screen. The first run downloads Kafka, ClickHouse and Grafana and takes several minutes.
+   5. Watch the logs. Each line starts with the service name. In the first minute you may see producer-1 exited with code 1 or consumer-1 exited with code 1. That is expected: Kafka was not ready, and Docker restarts them.
+   6. Wait for the pipeline to flow. It is working when these two lines keep repeating every 2 seconds:
+      * producer-1 | Sent: {...}: a reading went into Kafka.
+      * consumer-1 | Inserted: {...}: the same reading was saved in ClickHouse.
+
+Screenshot this terminal. Leave it running.
+
+Part B: check the data in ClickHouse
+   1. Open a second terminal with the + icon. It starts inside prac10.
+   2. Count the rows per city.
+
+      docker compose exec clickhouse clickhouse-client -q "SELECT city, count(), round(avg(pm25), 1) FROM air_quality GROUP BY city"
+
+It prints four lines, one per city, with the number of readings and the average PM2.5. Run it again after 10 seconds: the counts are higher. Screenshot it. This shows the OLAP engine answering an analysis query on live data.
+
+Part C: build the Grafana dashboard
+   1. Open Grafana. Go to http://localhost:3000. Log in with username admin and password admin. On the "change password" screen click Skip.
+   2. Open the data source page. Click the menu icon (three lines, top left), then Connections > Data sources > Add data source. Type ClickHouse in the search box and click it. If ClickHouse is not in the list, the plugin is still installing: wait a minute and refresh the page.
+   3. Fill in the connection:
+      * Server address: clickhouse (the service name, not localhost)
+      * Server port: 9000
+      * Protocol: Native
+      * Username: default
+      * Password: leave empty
+   4. Click Save & test. A green message "Data source is working" must appear. Screenshot it.
+   5. Create the dashboard. Menu > Dashboards > New > New dashboard > Add visualization, then choose the ClickHouse data source you just made.
+   6. Enter the query. In the query area at the bottom, switch from Query Builder to SQL Editor. Paste the query from "Code 6". Set Query Type to Time series. Click Run query.
+   7. Pick the graph type. At the top right of the editor, the visualization type should be Time series. Four lines appear, one per city.
+   8. Name the panel. In the right-hand panel options, set Title to Average PM2.5 by city.
+   9. Make it live. At the top right of the page:
+      * Click the time range and choose Last 15 minutes.
+      * Open the refresh dropdown (next to the refresh icon) and choose 5s.
+
+The lines now extend to the right on their own every few seconds.
+   10. Save. Click Save dashboard, name it Air Quality Live, and click Save.
+   11. Add a second panel (optional). Click Add > Visualization, use the SQL Editor with the query below, set Query Type to Table, and choose the Bar chart visualization. It shows how many readings each city has sent.
+
+      SELECT city, count() AS readings FROM default.air_quality GROUP BY city
+
+   12. Take the final screenshot of the dashboard with the moving lines.
+
+Part D: stop
+   1. Click in the first terminal and press Ctrl+C. Wait until all containers say "Stopped".
+   2. Run docker compose down. This also removes the stored rows and the dashboard, so take your screenshots first.
+
+For the journal: the Sent/Inserted logs, the ClickHouse count query, "Data source is working", and the dashboard.
+
+If something goes wrong
+   - failed to read dockerfile: the file is not named exactly Dockerfile, or it is not inside prac10.
+   - The producer or consumer keeps restarting for more than 2 minutes: run docker compose logs consumer and read the last error line.
+   - Table default.air_quality does not exist in step 8: the consumer has not started yet. Wait for the first Inserted: line.
+   - Save & test fails in Grafana: check the server address is clickhouse, the port is 9000 and the protocol is Native. For port 8123 the protocol must be HTTP.
+   - The graph says "No data": set the time range to Last 15 minutes, and check the query still contains $__timeFilter(event_time).
+   - port is already allocated: another program uses port 3000, 8123 or 9092. Stop the earlier practicals with docker compose down.
+
+CODE 1 (DOCKER-COMPOSE.YML)
+---------------------------
+
+Your journal's file with one addition: restart: on-failure on the producer and consumer. If Kafka is not ready yet, the Python program stops and Docker starts it again automatically. This lets the Python files be much shorter.
+
+      services:
+        kafka:
+          image: apache/kafka:3.9.1
+          ports:
+            - "9092:9092"
+          environment:
+            KAFKA_NODE_ID: 1
+            KAFKA_PROCESS_ROLES: broker,controller
+            KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+            KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+            KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+            KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+            KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+            KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+            KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+            KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+            KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+            KAFKA_NUM_PARTITIONS: 1
+      
+        clickhouse:
+          image: clickhouse/clickhouse-server:latest
+          ports:
+            - "8123:8123"
+            - "9000:9000"
+          environment:
+            CLICKHOUSE_SKIP_USER_SETUP: 1      # allows login as "default" with no password
+      
+        grafana:
+          image: grafana/grafana:latest
+          ports:
+            - "3000:3000"
+          environment:
+            GF_INSTALL_PLUGINS: grafana-clickhouse-datasource
+          depends_on:
+            - clickhouse
+      
+        producer:
+          build: .
+          command: python -u producer.py
+          restart: on-failure
+          depends_on:
+            - kafka
+      
+        consumer:
+          build: .
+          command: python -u consumer.py
+          restart: on-failure
+          depends_on:
+            - kafka
+            - clickhouse
+
+CODE 2 (DOCKERFILE)
+-------------------
+
+This is the recipe for a small container that has Python and your two scripts.
+
+      FROM python:3.11-slim
+      WORKDIR /app
+      COPY requirements.txt .
+      RUN pip install --no-cache-dir -r requirements.txt
+      COPY producer.py .
+      COPY consumer.py .
+      CMD ["python", "-u", "producer.py"]
+
+CODE 3 (REQUIREMENTS.TXT)
+-------------------------
+
+      kafka-python==2.2.15
+      clickhouse-connect==1.11.0
+
+CODE 4 (PRODUCER.PY), THE EASY VERSION
+--------------------------------------
+
+      import json, random, time
+      from datetime import datetime, timezone
+      from kafka import KafkaProducer
+      
+      producer = KafkaProducer(
+          bootstrap_servers="kafka:9092",
+          value_serializer=lambda v: json.dumps(v).encode("utf-8"))
+      
+      cities = ["Mumbai", "Pune", "Nashik", "Nagpur"]
+      print("Air Quality Producer Started", flush=True)
+      
+      while True:
+          reading = {
+              "event_time": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
+              "city": random.choice(cities),
+              "pm25": round(random.uniform(10, 180), 2),
+              "pm10": round(random.uniform(20, 250), 2),
+              "temperature": round(random.uniform(24, 38), 2),
+          }
+          producer.send("air_quality", value=reading)   # send to Kafka
+          print("Sent:", reading, flush=True)
+          time.sleep(2)                                 # one reading every 2 seconds
+
+CODE 5 (CONSUMER.PY), THE EASY VERSION
+--------------------------------------
+
+      import json
+      from datetime import datetime, timezone
+      import clickhouse_connect
+      from kafka import KafkaConsumer
+      
+      # 1. Connect to ClickHouse and create the table if it is not there
+      client = clickhouse_connect.get_client(
+          host="clickhouse", port=8123, username="default", password="")
+      client.command("""
+          CREATE TABLE IF NOT EXISTS default.air_quality (
+              event_time DateTime,
+              city String,
+              pm25 Float64,
+              pm10 Float64,
+              temperature Float64
+          ) ENGINE = MergeTree ORDER BY (city, event_time)
+      """)
+      
+      # 2. Connect to the Kafka topic
+      consumer = KafkaConsumer(
+          "air_quality",
+          bootstrap_servers="kafka:9092",
+          auto_offset_reset="earliest",
+          group_id="air-quality-group",
+          value_deserializer=lambda v: json.loads(v.decode("utf-8")))
+      print("Kafka Consumer Started", flush=True)
+      
+      # 3. Every message becomes one row in ClickHouse
+      for message in consumer:
+          r = message.value
+          # ClickHouse needs a real datetime, not text
+          t = datetime.strptime(r["event_time"], "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+          client.insert(
+              "default.air_quality",
+              [[t, r["city"], r["pm25"], r["pm10"], r["temperature"]]],
+              column_names=["event_time", "city", "pm25", "pm10", "temperature"])
+          print("Inserted:", r, flush=True)
+
+Your journal's two Python files do the same work but wrap every connection in a while True: try ... except ... sleep(3) loop to wait for Kafka and ClickHouse. Here Docker's restart: on-failure does that waiting, so you may see one or two "exited with code 1" lines at the start. That is expected.
+
+CODE 6: THE GRAFANA QUERY
+-------------------------
+
+      SELECT
+          toStartOfMinute(event_time) AS time,
+          city,
+          avg(pm25) AS pm25
+      FROM default.air_quality
+      WHERE $__timeFilter(event_time)
+      GROUP BY time, city
+      ORDER BY time
+
+It gives the average PM2.5 per city per minute. $__timeFilter is a Grafana shortcut that keeps only rows inside the time range chosen at the top right. Set the query type to Time series to get one line per city.
+
+OUTPUT YOU SHOULD SEE
+---------------------
+
+The first terminal, same as your journal:
+
+      producer-1 | Air Quality Producer Started
+      producer-1 | Sent: {'event_time': '2026-10-28 06:20:11', 'city': 'Pune', 'pm25': 87.41, 'pm10': 143.2, 'temperature': 29.8}
+      consumer-1 | Kafka Consumer Started
+      consumer-1 | Inserted: {'event_time': '2026-10-28 06:20:11', 'city': 'Pune', 'pm25': 87.41, 'pm10': 143.2, 'temperature': 29.8}
+
+The values are random, so yours will differ. In Grafana you see four lines (Mumbai, Pune, Nashik, Nagpur) that grow to the right every few seconds. The easy Python versions are not test-run here because I have no Docker; if anything fails, your journal's longer versions drop straight into the same compose file.

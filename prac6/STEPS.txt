@@ -1,0 +1,225 @@
+==============================================================================
+PRACTICAL 6: FLINK FRAUD DETECTION WITH STATE
+==============================================================================
+
+FILES IN THIS FOLDER (prac6)
+------------------------------
+  pom.xml
+  src/main/java/FraudDetectionJob.java
+  STEPS.txt   <- this file
+
+DEPENDENCIES FOR THIS PRACTICAL (check these first, install what is missing)
+----------------------------------------------------------------------------
+[ ] Java 17 (JDK)
+      Check :  java -version          -> must say  openjdk version "17...."
+               echo $env:JAVA_HOME    -> must point to the JDK 17 folder
+      Install:  download "Temurin 17 (LTS)" .msi from https://adoptium.net
+                During install switch ON "Set JAVA_HOME variable".
+      If java -version shows another version (e.g. 21 or 25 from Android Studio),
+      set JAVA_HOME to JDK 17 for the current terminal:
+               $env:JAVA_HOME="C:\Program Files\Eclipse Adoptium\jdk-17.x.x-hotspot"
+               $env:Path="$env:JAVA_HOME\bin;$env:Path"
+      (use the real folder name you see inside C:\Program Files\Eclipse Adoptium)
+
+[ ] Maven
+      Check :  mvn -version           -> Apache Maven 3.x  (and "Java version: 17")
+      Install:  1. Download "Binary zip archive" from https://maven.apache.org/download.cgi
+                2. Extract to C:\maven  (you get C:\maven\apache-maven-3.9.x\bin)
+                3. Add that bin folder to PATH, then reopen VS Code.
+      Flink libraries are downloaded AUTOMATICALLY by Maven from pom.xml on the
+      first run (internet needed, takes a few minutes).
+
+After installing anything: CLOSE VS Code / PowerShell and open it again.
+Full install guide for all practicals: C:\bigdata\00_SETUP_STEPS.txt
+
+Aim: write a Flink program that raises an alert when one customer makes two large transactions within 1 minute, using KeyedProcessFunction.
+
+IN SIMPLE WORDS
+---------------
+   - Flink processes events one by one as they arrive (true streaming).
+   - keyBy(customerId) sorts the stream by customer. Each customer is handled separately.
+   - State is Flink's memory. To know if two large transactions are close together, Flink must remember the previous one. ValueState remembers one value per key, so every customer has a private memory slot.
+   - KeyedProcessFunction is a class whose processElement method runs once for every event. Inside it you can read and update state.
+
+The logic for each transaction:
+   1. If the amount is below 10,000, ignore it.
+   2. Read from state: when was this customer's last large transaction?
+   3. If there was one, and the gap is 60 seconds or less, print a fraud alert.
+   4. Save this transaction's time in state as the new "last large transaction".
+
+Think of a security guard with a notebook. One page per customer. On each big withdrawal he checks the page: "last big one was 35 seconds ago, alert!" Then he writes the new time on the page.
+
+STEPS
+-----
+   1. Check the tools. In PowerShell run java -version (must show 17) and mvn -version (must show Apache Maven). Maven is the tool that downloads Flink and compiles Java for you.
+   2. Make the folders. Maven expects Java files in a fixed place, src\main\java. One command makes everything:
+
+      mkdir C:\bigdata\prac6\src\main\java
+
+   3. Open prac6 in VS Code with File > Open Folder. Select the prac6 folder itself, not src.
+   4. Create pom.xml. Click the New File icon while no folder is selected, so the file lands directly inside prac6. Paste Code 1 and save.
+   5. Create the Java file. In the Explorer, expand src > main > java, right-click java, choose New File, and name it exactly FraudDetectionJob.java. Paste Code 2 and save. In Java the file name must match the class name, including capital letters.
+   6. Check the structure. It must look like this:
+
+      prac6\
+        pom.xml
+        src\main\java\FraudDetectionJob.java
+
+   7. Run it. In the VS Code terminal (it starts inside prac6). The quotes are needed in PowerShell:
+
+      mvn compile exec:java "-Dexec.mainClass=FraudDetectionJob"
+
+compile turns the Java file into a runnable class. exec:java runs its main method.
+   8. First run only: Maven prints hundreds of Downloading and Downloaded lines for a few minutes while it fetches Flink. Later runs take a few seconds.
+   9. Find the result. Among the [INFO] lines, two lines start with FRAUD ALERT. After them Maven prints BUILD SUCCESS. Screenshot from the alerts down to BUILD SUCCESS.
+   10. Match the alerts with the table under "Output you should see". Both alerts are for C101: 35 seconds apart, then 45 seconds apart.
+   11. Test your understanding (optional). In the last transaction change 130000 to 100000, save, and run the command again. C202's two large transactions are now 50 seconds apart, so a third alert appears, for C202.
+
+For the journal: the folder structure in the Explorer, and the terminal with the two alerts and BUILD SUCCESS.
+
+If something goes wrong
+   - mvn is not recognized: the Maven bin folder is not on PATH. Redo setup step 5 and reopen VS Code.
+   - Unknown lifecycle phase ".mainClass=FraudDetectionJob": the quotes around -Dexec.mainClass=... are missing.
+   - package org.apache.flink... does not exist: pom.xml is in the wrong place or you ran the command from another folder. Run dir; it must list both pom.xml and src.
+   - class FraudDetectionJob is public, should be declared in a file named...: the file name does not match. Rename it to FraudDetectionJob.java.
+   - release version 17 not supported: Maven is using an older Java. Check mvn -version and redo setup step 4.
+   - InaccessibleObjectException: run the $env:MAVEN_OPTS=... line given at the end of this practical, then run the command again in the same terminal.
+
+CODE 1 (POM.XML)
+----------------
+
+This file tells Maven which libraries to download. It is the same as your journal: Flink 1.19.2 with Java 17.
+
+      <project xmlns="http://maven.apache.org/POM/4.0.0">
+        <modelVersion>4.0.0</modelVersion>
+        <groupId>com.example</groupId>
+        <artifactId>flink-practical</artifactId>
+        <version>1.0-SNAPSHOT</version>
+      
+        <properties>
+          <maven.compiler.release>17</maven.compiler.release>
+          <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+          <flink.version>1.19.2</flink.version>
+        </properties>
+      
+        <dependencies>
+          <dependency>
+            <groupId>org.apache.flink</groupId>
+            <artifactId>flink-streaming-java</artifactId>
+            <version>${flink.version}</version>
+          </dependency>
+          <dependency>
+            <groupId>org.apache.flink</groupId>
+            <artifactId>flink-clients</artifactId>
+            <version>${flink.version}</version>
+          </dependency>
+        </dependencies>
+      </project>
+
+CODE 2 (FRAUDDETECTIONJOB.JAVA), THE EASY VERSION
+-------------------------------------------------
+
+Your journal code stores the whole previous transaction and has a separate FraudAlert class. This version stores only the previous time and prints the alert as a plain sentence. The logic is identical, with about half the lines.
+
+      import org.apache.flink.api.common.state.ValueState;
+      import org.apache.flink.api.common.state.ValueStateDescriptor;
+      import org.apache.flink.api.common.typeinfo.Types;
+      import org.apache.flink.configuration.Configuration;
+      import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
+      import org.apache.flink.streaming.api.functions.KeyedProcessFunction;
+      import org.apache.flink.util.Collector;
+      
+      public class FraudDetectionJob {
+      
+          // One transaction: who, how much, when (time in milliseconds)
+          public static class Transaction {
+              public String customerId;
+              public double amount;
+              public long timestamp;
+      
+              public Transaction() {}
+              public Transaction(String customerId, double amount, long timestamp) {
+                  this.customerId = customerId;
+                  this.amount = amount;
+                  this.timestamp = timestamp;
+              }
+          }
+      
+          // Runs once for every transaction of a customer
+          public static class FraudDetector
+                  extends KeyedProcessFunction<String, Transaction, String> {
+      
+              // STATE: time of this customer's last large transaction
+              private transient ValueState<Long> lastLargeTime;
+      
+              @Override
+              public void open(Configuration parameters) {
+                  lastLargeTime = getRuntimeContext().getState(
+                          new ValueStateDescriptor<>("last-large-time", Types.LONG));
+              }
+      
+              @Override
+              public void processElement(Transaction tx, Context ctx,
+                                         Collector<String> out) throws Exception {
+                  if (tx.amount < 10000) {
+                      return;                              // small amount: ignore
+                  }
+      
+                  Long last = lastLargeTime.value();       // read the state
+      
+                  if (last != null && tx.timestamp - last <= 60000) {
+                      long gapSeconds = (tx.timestamp - last) / 1000;
+                      out.collect("FRAUD ALERT: Customer " + tx.customerId
+                              + " made two large transactions within "
+                              + gapSeconds + " seconds. Latest amount = " + tx.amount);
+                  }
+      
+                  lastLargeTime.update(tx.timestamp);      // save the state
+              }
+          }
+      
+          public static void main(String[] args) throws Exception {
+              StreamExecutionEnvironment env =
+                      StreamExecutionEnvironment.getExecutionEnvironment();
+              env.setParallelism(1);
+      
+              // Test data: customer, amount, time in milliseconds
+              env.fromData(
+                      new Transaction("C101", 15000, 10000),    // 10 s
+                      new Transaction("C202", 5000, 20000),     // 20 s
+                      new Transaction("C101", 20000, 45000),    // 45 s
+                      new Transaction("C202", 12000, 50000),    // 50 s
+                      new Transaction("C101", 3000, 55000),     // 55 s
+                      new Transaction("C101", 18000, 90000),    // 90 s
+                      new Transaction("C202", 14000, 130000))   // 130 s
+                  .keyBy(tx -> tx.customerId)       // separate memory per customer
+                  .process(new FraudDetector())
+                  .print();
+      
+              env.execute("Fraud Detection Job");
+          }
+      }
+
+OUTPUT YOU SHOULD SEE
+---------------------
+
+Two alerts, both for C101. Work it out by hand to explain it in viva:
+
+  Customer | Time  | Amount | What happens
+  ---------+-------+--------+------------------------------------------
+  C101     | 10 s  | 15,000 | Large, first one. Saved in state.
+  C202     | 20 s  | 5,000  | Small. Ignored.
+  C101     | 45 s  | 20,000 | Large, 35 s after the last. Alert.
+  C202     | 50 s  | 12,000 | Large, first one for C202. Saved.
+  C101     | 55 s  | 3,000  | Small. Ignored.
+  C101     | 90 s  | 18,000 | Large, 45 s after the last. Alert.
+  C202     | 130 s | 14,000 | Large, but 80 s after the last. No alert.
+
+      FRAUD ALERT: Customer C101 made two large transactions within 35 seconds. Latest amount = 20000.0
+      FRAUD ALERT: Customer C101 made two large transactions within 45 seconds. Latest amount = 18000.0
+
+If you see InaccessibleObjectException, run this line in the same terminal and try again:
+
+      $env:MAVEN_OPTS="--add-opens java.base/java.util=ALL-UNNAMED --add-opens java.base/java.lang=ALL-UNNAMED"
+
+I could not compile this here (the Flink download was blocked), so the easy version is not test-run; your journal's longer version is known to work if you prefer it.

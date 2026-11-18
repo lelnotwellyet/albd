@@ -1,0 +1,218 @@
+==============================================================================
+PRACTICAL 8: GRAPHX PAGERANK ON A SOCIAL NETWORK
+==============================================================================
+
+FILES IN THIS FOLDER (prac8)
+------------------------------
+  build.sbt
+  data/vertices.csv
+  data/edges.csv
+  src/main/scala/GraphXPageRank.scala
+  STEPS.txt   <- this file
+
+DEPENDENCIES FOR THIS PRACTICAL (check these first, install what is missing)
+----------------------------------------------------------------------------
+[ ] Java 17 (JDK)
+      Check :  java -version          -> must say  openjdk version "17...."
+               echo $env:JAVA_HOME    -> must point to the JDK 17 folder
+      Install:  download "Temurin 17 (LTS)" .msi from https://adoptium.net
+                During install switch ON "Set JAVA_HOME variable".
+      If java -version shows another version (e.g. 21 or 25 from Android Studio),
+      set JAVA_HOME to JDK 17 for the current terminal:
+               $env:JAVA_HOME="C:\Program Files\Eclipse Adoptium\jdk-17.x.x-hotspot"
+               $env:Path="$env:JAVA_HOME\bin;$env:Path"
+      (use the real folder name you see inside C:\Program Files\Eclipse Adoptium)
+
+[ ] sbt (Scala build tool)
+      Check :  sbt --version          -> sbt runner version 1.x
+      Install:  download the .msi from https://www.scala-sbt.org/download/ and run it.
+                Reopen VS Code afterwards.
+      Scala and Spark/GraphX libraries are downloaded AUTOMATICALLY by sbt from
+      build.sbt on the first run (internet needed, 5-10 minutes).
+
+After installing anything: CLOSE VS Code / PowerShell and open it again.
+Full install guide for all practicals: C:\bigdata\00_SETUP_STEPS.txt
+
+Aim: load a small social network into Spark GraphX and find the most influential person with PageRank.
+
+IN SIMPLE WORDS
+---------------
+   - A graph is dots joined by lines. The dots are vertices (here: people). The lines are edges (here: who follows whom). An edge 1,2 means user 1 follows user 2.
+   - GraphX is Spark's library for graphs. It works only in Scala, which is why this practical is not in Python.
+   - PageRank gives every person a score. It is the method Google first used to rank web pages. Two rules decide the score:
+      * More followers gives a higher score.
+      * A follower who is important gives you more score than a follower who is not.
+   - The person with the highest score is the most influential.
+   - pageRank(0.0001) means: keep recalculating until scores change by less than 0.0001.
+
+STEPS
+-----
+   1. Check the tools. Run java -version (must show 17) and sbt --version. sbt is the build tool for Scala, like Maven for Java. The first time, sbt downloads part of itself, which takes a minute.
+   2. Make the folders. sbt expects Scala files in src\main\scala. Run these two commands:
+
+      mkdir C:\bigdata\GraphX_PageRank_Practical\data
+      mkdir C:\bigdata\GraphX_PageRank_Practical\src\main\scala
+
+   3. Open GraphX_PageRank_Practical in VS Code with File > Open Folder.
+   4. Create build.sbt directly inside the top folder. Paste Code 1 and save. This file tells sbt which Scala version and which Spark libraries to download.
+   5. Create the two data files. Right-click the data folder, choose New File:
+      * vertices.csv: paste Code 2. One line per person.
+      * edges.csv: paste Code 3. One line per "follows" link.
+
+Do not leave a blank line at the end of either file, or the program fails while reading it.
+   6. Create the Scala file. Expand src > main > scala, right-click scala, choose New File, name it GraphXPageRank.scala, paste Code 4 and save.
+   7. Check the structure. It must look like this:
+
+      GraphX_PageRank_Practical\
+        build.sbt
+        data\vertices.csv
+        data\edges.csv
+        src\main\scala\GraphXPageRank.scala
+
+   8. Run it from the top folder, in the VS Code terminal:
+
+      sbt run
+
+   9. First run only: sbt downloads Scala and Spark and compiles the code. This takes 5 to 10 minutes and prints many [info] lines. Later runs take under a minute.
+   10. Find the result. After the line [info] running (fork) GraphXPageRank, the program's own lines appear, each with [info] in front: Total Users, Total Relationships, the PageRank list, and Most Influential User. The run ends with [success].
+   11. Take a screenshot from "Total Users" down to [success].
+   12. Draw the graph for the journal (good for viva). On paper, draw six circles with the names and one arrow for each line in edges.csv, from follower to followed. Four arrows point into Charlie, which is why he ranks first.
+   13. Test your understanding (optional). Add the line 4,5 to edges.csv (David follows Emma), save, and run sbt run again. Emma's score goes up, because she has a new follower.
+
+For the journal: the folder structure, the two CSV files, and the terminal output.
+
+If something goes wrong
+   - sbt is not recognized: close and reopen VS Code after installing sbt.
+   - Input path does not exist: .../data/vertices.csv: the data folder is in the wrong place, or you ran sbt run from another folder. Run dir; it must list build.sbt, data and src.
+   - object SparkSession is not a member of package org.apache.spark.sql: the spark-sql line is missing from build.sbt.
+   - cannot access class sun.nio.ch.DirectBuffer: the fork and javaOptions lines are missing from build.sbt.
+   - NumberFormatException or ArrayIndexOutOfBoundsException: a CSV file has a blank line or a missing comma.
+   - Lines about winutils or HADOOP_HOME marked as errors while the results still print: these are harmless here, because this practical only reads files.
+
+CODE 1 (BUILD.SBT)
+------------------
+
+      name := "GraphXPageRank"
+      version := "1.0"
+      scalaVersion := "2.12.18"
+      
+      libraryDependencies ++= Seq(
+        "org.apache.spark" %% "spark-core" % "3.5.7",
+        "org.apache.spark" %% "spark-sql" % "3.5.7",
+        "org.apache.spark" %% "spark-graphx" % "3.5.7"
+      )
+      
+      // Needed so Spark 3.5 runs on Java 17 from sbt
+      fork := true
+      javaOptions ++= Seq(
+        "--add-opens=java.base/java.lang=ALL-UNNAMED",
+        "--add-opens=java.base/java.lang.invoke=ALL-UNNAMED",
+        "--add-opens=java.base/java.nio=ALL-UNNAMED",
+        "--add-opens=java.base/java.util=ALL-UNNAMED",
+        "--add-opens=java.base/sun.nio.ch=ALL-UNNAMED"
+      )
+
+I added two things to your journal's file. spark-sql is listed because the code uses SparkSession, which lives in that library. The fork and javaOptions lines prevent the cannot access class sun.nio.ch.DirectBuffer error on Java 17.
+
+CODE 2 (DATA/VERTICES.CSV): THE PEOPLE
+--------------------------------------
+
+      id,name
+      1,Alice
+      2,Bob
+      3,Charlie
+      4,David
+      5,Emma
+      6,Frank
+
+CODE 3 (DATA/EDGES.CSV): WHO FOLLOWS WHOM
+-----------------------------------------
+
+Your journal PDF does not show this file as text, so this is a sample. Four people follow Charlie, so Charlie should come first.
+
+      src,dst
+      1,2
+      2,3
+      3,1
+      4,3
+      5,3
+      6,3
+      6,5
+
+CODE 4 (SRC/MAIN/SCALA/GRAPHXPAGERANK.SCALA)
+--------------------------------------------
+
+      import org.apache.spark.sql.SparkSession
+      import org.apache.spark.graphx._
+      import org.apache.spark.rdd.RDD
+      
+      object GraphXPageRank {
+        def main(args: Array[String]): Unit = {
+      
+          // Start Spark
+          val spark = SparkSession.builder()
+            .appName("GraphX PageRank")
+            .master("local[*]")
+            .getOrCreate()
+          val sc = spark.sparkContext
+          sc.setLogLevel("ERROR")
+      
+          // 1. Read the people: (id, name). Skip the header line
+          val users: RDD[(VertexId, String)] =
+            sc.textFile("data/vertices.csv")
+              .filter(!_.startsWith("id,"))
+              .map { line =>
+                val f = line.split(",")
+                (f(0).toLong, f(1))
+              }
+      
+          // 2. Read the follows: Edge(from, to, weight 1)
+          val follows: RDD[Edge[Int]] =
+            sc.textFile("data/edges.csv")
+              .filter(!_.startsWith("src,"))
+              .map { line =>
+                val f = line.split(",")
+                Edge(f(0).toLong, f(1).toLong, 1)
+              }
+      
+          // 3. Build the graph
+          val graph = Graph(users, follows)
+          println("Total Users: " + graph.numVertices)
+          println("Total Relationships: " + graph.numEdges)
+      
+          // 4. Run PageRank: gives (id, score)
+          val ranks = graph.pageRank(0.0001).vertices
+      
+          // 5. Join scores with names and sort, highest first
+          val result = users.join(ranks)
+            .map { case (id, (name, rank)) => (name, rank) }
+            .sortBy(_._2, ascending = false)
+      
+          println("PageRank Results")
+          result.collect().foreach { case (name, rank) =>
+            println(name + " : " + rank)
+          }
+      
+          println("Most Influential User: " + result.first()._1)
+      
+          spark.stop()
+        }
+      }
+
+OUTPUT YOU SHOULD SEE
+---------------------
+
+With the sample edges above, the order is Charlie, Alice, Bob, Emma, then David and Frank tied at the bottom. I worked the scores out by hand from the PageRank formula; the decimals on your screen may differ slightly.
+
+      Total Users: 6
+      Total Relationships: 7
+      PageRank Results
+      Charlie : 1.97
+      Alice : 1.82
+      Bob : 1.70
+      Emma : 0.21
+      David : 0.15
+      Frank : 0.15
+      Most Influential User: Charlie
+
+Why this order: Charlie has four followers. Alice has only one follower, but that follower is Charlie, the most important person, so Alice comes second. David and Frank have no followers and get the minimum score 0.15. This was not test-run here because sbt is not available in my environment.

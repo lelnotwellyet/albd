@@ -1,0 +1,188 @@
+==============================================================================
+PRACTICAL 7: WATERMARKS, LATE DATA AND SIDE OUTPUTS
+==============================================================================
+
+FILES IN THIS FOLDER (prac7)
+------------------------------
+  latedata.py
+  STEPS.txt   <- this file
+
+DEPENDENCIES FOR THIS PRACTICAL (check these first, install what is missing)
+----------------------------------------------------------------------------
+[ ] Python 3.11
+      Check :  python --version       -> Python 3.11.x
+      Install:  https://www.python.org/downloads/  (Windows installer 3.11.x)
+                Tick "Add python.exe to PATH" on the first screen.
+      (PyFlink does NOT work on newer Python - use 3.10 or 3.11;
+       if you have several Pythons, use  py -3.11  instead of python)
+
+[ ] Java 17 (JDK)
+      Check :  java -version          -> must say  openjdk version "17...."
+               echo $env:JAVA_HOME    -> must point to the JDK 17 folder
+      Install:  download "Temurin 17 (LTS)" .msi from https://adoptium.net
+                During install switch ON "Set JAVA_HOME variable".
+      If java -version shows another version (e.g. 21 or 25 from Android Studio),
+      set JAVA_HOME to JDK 17 for the current terminal:
+               $env:JAVA_HOME="C:\Program Files\Eclipse Adoptium\jdk-17.x.x-hotspot"
+               $env:Path="$env:JAVA_HOME\bin;$env:Path"
+      (use the real folder name you see inside C:\Program Files\Eclipse Adoptium)
+
+[ ] Python libraries: apache-flink
+      Check :  python -c "import pyflink; print('ok')"
+      Install:  pip install apache-flink
+                (if "No module named ..." still appears:  python -m pip install apache-flink)
+
+After installing anything: CLOSE VS Code / PowerShell and open it again.
+Full install guide for all practicals: C:\bigdata\00_SETUP_STEPS.txt
+
+Aim: build a Flink stream that groups events into time windows, and sends events that arrive too late to a separate side output.
+
+IN SIMPLE WORDS
+---------------
+   - Event time is when something really happened (written inside the event). Processing time is when Flink received it. Because of network delay, events can arrive in the wrong order.
+   - A window cuts the stream into time boxes. A tumbling window of 10 seconds makes boxes 0 to 10 s, 10 to 20 s, 20 to 30 s, with no overlap.
+   - Flink must decide when a box is complete so it can print the result. For this it uses a watermark: a marker that says "I believe all events up to this time have arrived".
+   - Here watermark = (largest event time seen so far) minus 2 seconds. The 2 seconds is the waiting allowance for slow events.
+   - When the watermark passes the end of a window, the window closes and its result is printed.
+   - Late data = an event that belongs to a window that has already closed. Normally Flink throws it away. A side output is a second pipe that catches these late events so nothing is lost.
+
+Think of a teacher taking attendance. She waits 2 minutes after the bell, then closes the register (the watermark passed). A student who comes after that is written on a separate late slip (the side output).
+
+WHAT HAPPENS TO THE FOUR EVENTS
+-------------------------------
+
+The events are food delivery updates. "Order confirmed" happened at 3 s but arrives last.
+
+  Arrives | Event           | Event time | Watermark after it | What happens
+  --------+-----------------+------------+--------------------+------------------------------------------------------------------------------------------------
+  1st     | Picked up       | 1 s        | about 0 s          | Goes into window 0 to 10 s
+  2nd     | At restaurant   | 8 s        | 6 s                | Goes into window 0 to 10 s
+  3rd     | Delivered       | 22 s       | 20 s               | Goes into window 20 to 30 s. Watermark 20 s is past 10 s, so window 0 to 10 s closes and prints
+  4th     | Order confirmed | 3 s        | 20 s               | Belongs to window 0 to 10 s, which is already closed. Late: goes to side output
+
+STEPS
+-----
+   1. Check the Python version. Run python --version. It must show 3.11 (or 3.10). PyFlink does not support the newest Python versions. If it shows a newer one, install Python 3.11 and use py -3.11 in place of python below.
+   2. Install PyFlink.
+
+      pip install apache-flink
+
+It is a large download and can take several minutes.
+   3. Check the install. This must print ok:
+
+      python -c "import pyflink; print('ok')"
+
+   4. Check Java: java -version must show 17. PyFlink runs a Java engine underneath.
+   5. Make the folder. Run mkdir C:\bigdata\prac7 and open it in VS Code.
+   6. Create the file. New File, name it latedata.py, paste the code below, save with Ctrl+S. Python depends on the spaces at the start of lines, so paste it exactly. The code in your journal PDF has lost its indentation, so do not copy from the PDF.
+   7. Run it.
+
+      python latedata.py
+
+   8. Wait. Nothing prints for about 10 seconds while Flink starts. Then the events are sent one per second (the slow function). The whole run takes about 20 seconds and ends by itself. Some WARNING lines may print; ignore them.
+   9. Read the three output lines next to the table "What happens to the four events":
+      * MAIN OUTPUT ... 'Picked up + At restaurant': window 0 to 10 s. It closed when "Delivered" (22 s) pushed the watermark to 20 s.
+      * SIDE OUTPUT ... 'Order confirmed': this event (3 s) came after its window had closed, so it went to the side output.
+      * MAIN OUTPUT ... 'Delivered': window 20 to 30 s. It closed when the stream ended.
+   10. Take a screenshot of the three lines.
+   11. Prove you understand it (optional). In the events list, move ("Order confirmed", 3000) up so it is the third item, before "Delivered". Save and run again. Now there is no SIDE OUTPUT line, and the first window shows Picked up + At restaurant + Order confirmed. The event was out of order but not late, because its window was still open when it arrived.
+   12. Second experiment (optional). Put the list back, then change Duration.of_seconds(2) to Duration.of_seconds(20). The watermark now waits 20 seconds, so the first window stays open longer and "Order confirmed" is not late any more. A bigger allowance loses less data but makes results come later.
+
+For the journal: the terminal with the three lines. If you do step 11, add that screenshot too; it shows the difference between out-of-order and late.
+
+If something goes wrong
+   - No module named 'pyflink': the library went to a different Python. Run python -m pip install apache-flink.
+   - IndentationError: the spaces were changed while pasting. Paste the code again from this guide.
+   - The install in step 2 fails with a build error: the Python version is too new. Use Python 3.11.
+   - An error about JAVA_HOME: redo setup step 4 with Set JAVA_HOME variable switched on, then reopen VS Code.
+
+CODE (LATEDATA.PY)
+------------------
+
+This is "Code 2" from your journal with the missing import lines added at the top. Your journal's "Code 1" has the events in a different order (Order confirmed arrives third, before Delivered). In that order nothing is late, because the window is still open when it arrives. That is why Code 2 exists: it moves Order confirmed to the end.
+
+      import time
+      from pyflink.common import Types, WatermarkStrategy, Duration, Configuration
+      from pyflink.common.time import Time
+      from pyflink.common.watermark_strategy import TimestampAssigner
+      from pyflink.datastream import StreamExecutionEnvironment
+      from pyflink.datastream.output_tag import OutputTag
+      from pyflink.datastream.window import TumblingEventTimeWindows
+      
+      
+      # Tells Flink where the event time is: the 2nd item of each tuple
+      class EventTimeAssigner(TimestampAssigner):
+          def extract_timestamp(self, value, record_timestamp):
+              return value[1]
+      
+      
+      env = StreamExecutionEnvironment.get_execution_environment()
+      env.set_parallelism(1)
+      
+      # These settings make Flink handle one event at a time,
+      # so 4 test events behave like a real slow stream
+      env.set_buffer_timeout(0)
+      env.get_config().set_auto_watermark_interval(100)
+      conf = Configuration()
+      conf.set_string("python.fn-execution.bundle.size", "1")
+      conf.set_string("python.fn-execution.bundle.time", "1")
+      conf.set_string("python.operator-chaining.enabled", "false")
+      env.configure(conf)
+      
+      # (status, event time in milliseconds). "Order confirmed" arrives LAST
+      events = [
+          ("Picked up", 1000),
+          ("At restaurant", 8000),
+          ("Delivered", 22000),
+          ("Order confirmed", 3000),
+      ]
+      data = env.from_collection(
+          events, type_info=Types.TUPLE([Types.STRING(), Types.LONG()]))
+      
+      
+      # Wait 1 second between events, like a slow network
+      def slow(e):
+          time.sleep(1)
+          return e
+      
+      
+      data = data.map(slow, output_type=Types.TUPLE([Types.STRING(), Types.LONG()]))
+      
+      # WATERMARK: allow events to be up to 2 seconds out of order
+      watermarks = (WatermarkStrategy
+                    .for_bounded_out_of_orderness(Duration.of_seconds(2))
+                    .with_timestamp_assigner(EventTimeAssigner()))
+      stream = data.assign_timestamps_and_watermarks(watermarks)
+      
+      # SIDE OUTPUT: a label for the pipe that catches late events
+      late_tag = OutputTag("late_events",
+                           Types.TUPLE([Types.STRING(), Types.LONG()]))
+      
+      # WINDOW: 10-second tumbling windows, late events go to late_tag
+      windowed = (stream
+                  .key_by(lambda event: "delivery", key_type=Types.STRING())
+                  .window(TumblingEventTimeWindows.of(Time.seconds(10)))
+                  .side_output_late_data(late_tag))
+      
+      # Join the names of all events that fell in the same window
+      main = windowed.reduce(
+          lambda a, b: (a[0] + " + " + b[0], max(a[1], b[1])),
+          output_type=Types.TUPLE([Types.STRING(), Types.LONG()]))
+      
+      late = main.get_side_output(late_tag)
+      
+      main.map(lambda e: "MAIN OUTPUT (window result): " + str(e),
+               output_type=Types.STRING()).print()
+      late.map(lambda e: "SIDE OUTPUT (late event): " + str(e),
+               output_type=Types.STRING()).print()
+      
+      env.execute("Food Delivery Late Data")
+
+OUTPUT YOU SHOULD SEE
+---------------------
+
+      MAIN OUTPUT (window result): ('Picked up + At restaurant', 8000)
+      SIDE OUTPUT (late event): ('Order confirmed', 3000)
+      MAIN OUTPUT (window result): ('Delivered', 22000)
+
+The first line is window 0 to 10 s. The second line is the late event, caught by the side output and not lost. The third line is window 20 to 30 s, which closes when the stream ends. I could not run PyFlink here, so this is the result the code is designed to give, worked out from the table above.

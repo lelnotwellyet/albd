@@ -1,0 +1,137 @@
+==============================================================================
+PRACTICAL 1: SPARK OPTIMIZATION (DATA SKEW AND SHUFFLE)
+==============================================================================
+
+FILES IN THIS FOLDER (prac1)
+------------------------------
+  skew.py
+  STEPS.txt   <- this file
+
+DEPENDENCIES FOR THIS PRACTICAL (check these first, install what is missing)
+----------------------------------------------------------------------------
+[ ] Python 3.11
+      Check :  python --version       -> Python 3.11.x
+      Install:  https://www.python.org/downloads/  (Windows installer 3.11.x)
+                Tick "Add python.exe to PATH" on the first screen.
+
+[ ] Java 17 (JDK)
+      Check :  java -version          -> must say  openjdk version "17...."
+               echo $env:JAVA_HOME    -> must point to the JDK 17 folder
+      Install:  download "Temurin 17 (LTS)" .msi from https://adoptium.net
+                During install switch ON "Set JAVA_HOME variable".
+      If java -version shows another version (e.g. 21 or 25 from Android Studio),
+      set JAVA_HOME to JDK 17 for the current terminal:
+               $env:JAVA_HOME="C:\Program Files\Eclipse Adoptium\jdk-17.x.x-hotspot"
+               $env:Path="$env:JAVA_HOME\bin;$env:Path"
+      (use the real folder name you see inside C:\Program Files\Eclipse Adoptium)
+
+[ ] Python libraries: pyspark
+      Check :  python -c "import pyspark; print(pyspark.__version__)"
+      Install:  pip install pyspark
+                (if "No module named ..." still appears:  python -m pip install pyspark)
+
+After installing anything: CLOSE VS Code / PowerShell and open it again.
+Full install guide for all practicals: C:\bigdata\00_SETUP_STEPS.txt
+
+Aim: run a Spark job, see data skew in the Spark UI, and fix it with salting.
+
+IN SIMPLE WORDS
+---------------
+   - Shuffle means Spark moves rows between partitions so that rows with the same key sit together. groupBy and join cause a shuffle. It is the slowest part of a job.
+   - Data skew means one key has far more rows than the others. Here key 0 has 90% of 5 million rows. One task gets almost all the work while the other tasks finish quickly and wait.
+   - Salting is the fix. Add a random number (the salt, 0 to 7) to each row. Key 0 becomes eight smaller groups: 0+salt 0, 0+salt 1, and so on. Now eight tasks share the work.
+   - Salting needs two steps: first count per (key, salt), then add those small counts back per key.
+
+Think of one billing counter with 900 people and seven counters with 15 each. Salting sends the 900 people to all eight counters.
+
+STEPS
+-----
+   1. Make the folder. In PowerShell run mkdir C:\bigdata\prac1. Open it in VS Code with File > Open Folder.
+   2. Create the file. Click the New File icon, name it skew.py, paste the code from "Easy code" below, and save with Ctrl+S.
+   3. Open the VS Code terminal (Terminal > New Terminal) and run:
+
+      python skew.py
+
+   4. Wait 10 to 20 seconds while Spark starts. If Windows Firewall asks about Java, click Allow access. A few WARN lines at the top (for example NativeCodeLoader or winutils) are normal for this practical. Ignore them.
+   5. Read the three tables as they print:
+      * Table 1 (PROBLEM): key 0 has 4,500,000 rows and every other key has about 500. This is the skew.
+      * Table 2 (After salting): key 0 appears 8 times, once per salt, each with about 562,000 rows.
+      * Table 3 (FINAL): key 0 is back to 4,500,000. The answer is unchanged.
+   6. Open the Spark UI quickly. When the line Open the Spark UI: http://localhost:4040 prints, the program stays alive for only 2 minutes. Open that address in Chrome or Edge now. If the page does not load, try http://localhost:4041.
+   7. Jobs tab. You see a list of finished jobs, one for each show(). This proves the job ran. Take a screenshot (Windows key + Shift + S).
+   8. Stages tab. Click Stages at the top. Each row is one stage. Look at the columns Shuffle Read and Shuffle Write: a stage that has a value there took part in a shuffle.
+   9. Find the skew. Click the blue description link of a stage that has a Shuffle Read value. Scroll to Summary Metrics for Completed Tasks and read the row Shuffle Read Size / Records.
+      * If Max is many times bigger than Median, one task received most of the data. That is skew.
+      * If Min, Median and Max are close together, the load is balanced. That is what salting gives.
+   10. Compare before and after. Open an early stage (from the first groupBy) and a later stage (from the salted groupBy) and compare their Max and Median. Screenshot both.
+   11. SQL / DataFrame tab (optional). Click a query to see its plan as boxes. Every box named Exchange is one shuffle. The salted query has two, one for each groupBy.
+   12. Finish. The program stops by itself after 2 minutes. To stop earlier, click in the terminal and press Ctrl+C. To get more time in the UI, change time.sleep(120) to time.sleep(600).
+   13. At the end you may see red lines saying Exception while deleting Spark temp dir. This is a known Windows cleanup message. The practical has already finished correctly.
+
+For the journal: the terminal with the three tables, the Jobs tab, and the Summary Metrics of one stage.
+
+If something goes wrong
+   - python is not recognized: Python is not on PATH. Reinstall it with Add python.exe to PATH ticked, or use py skew.py.
+   - ModuleNotFoundError: No module named 'pyspark': the library went to a different Python. Run python -m pip install pyspark and try again.
+   - JAVA_HOME is not set or Java gateway process exited: Java is missing or not on PATH. Redo setup step 4 and reopen the terminal.
+   - The browser says "This site can't be reached": the 2 minutes are over. Run the script again.
+
+EASY CODE (SKEW.PY)
+-------------------
+
+      import time
+      from pyspark.sql import SparkSession
+      from pyspark.sql.functions import col, when, rand, sum as _sum
+      
+      # Start Spark on 4 cores, with 8 shuffle partitions
+      spark = (SparkSession.builder.appName("SkewDemo").master("local[4]")
+               .config("spark.sql.shuffle.partitions", "8")
+               .getOrCreate())
+      spark.sparkContext.setLogLevel("ERROR")
+      
+      # 5 million rows. 90% get key 0, the rest get keys 1 to 999
+      n = 5_000_000
+      df = spark.range(n).withColumn(
+          "key", when(col("id") < n * 0.9, 0).otherwise(col("id") % 999 + 1))
+      
+      print("PROBLEM: one key has 90% of the rows")
+      df.groupBy("key").count().orderBy(col("count").desc()).show(5)
+      
+      # FIX step 1: add a random salt from 0 to 7
+      salted = df.withColumn("salt", (rand() * 8).cast("int"))
+      
+      # FIX step 2: count per (key, salt) -> key 0 is now 8 small groups
+      part = salted.groupBy("key", "salt").count()
+      print("After salting: key 0 is split into 8 small groups")
+      part.filter(col("key") == 0).orderBy("salt").show()
+      
+      # FIX step 3: add the small counts back together per key
+      final = (part.groupBy("key").agg(_sum("count").alias("count"))
+               .orderBy(col("count").desc()))
+      print("FINAL: same answer as before")
+      final.show(5)
+      
+      print("Open the Spark UI: http://localhost:4040")
+      time.sleep(120)   # keeps the Spark UI alive for 2 minutes
+      spark.stop()
+
+WHAT CHANGED FROM YOUR JOURNAL CODE
+-----------------------------------
+   - The long java_flags block is removed. Current PySpark adds those Java 17 flags by itself.
+   - Your journal joins key and salt into one text column (concat_ws). Grouping by the two columns key and salt does the same job with less code.
+
+OUTPUT YOU SHOULD SEE
+---------------------
+
+I ran this code. Key 0 first shows 4,500,000 rows. After salting it shows eight rows of about 562,000 each. The final table again shows 4,500,000 for key 0, which proves salting did not change the answer.
+
+      After salting: key 0 is split into 8 small groups
+      +---+----+------+
+      |key|salt| count|
+      +---+----+------+
+      |  0|   0|562296|
+      |  0|   1|563447|
+      |  0|   2|562371|
+       ...
+
+One point for viva: salting matters most in joins and heavy aggregations. For a plain count, Spark already does a small count inside each partition before the shuffle, so the skew you see in the UI is mild.

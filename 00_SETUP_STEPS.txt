@@ -1,0 +1,70 @@
+==============================================================================
+BEFORE YOU START - SETUP (do once, before any practical)
+==============================================================================
+
+Install these tools once and all 10 practicals will run. Every command in this guide is for Windows 10 or 11, typed in PowerShell or the VS Code terminal.
+
+SETUP STEPS (DO ONCE)
+---------------------
+   1. Open PowerShell. Press the Windows key, type PowerShell, press Enter. After every install below, close PowerShell and open it again so it sees the new program.
+   2. Install Python 3.11. Download the Windows installer from python.org. On the first installer screen tick Add python.exe to PATH, then click Install Now. Python 3.11 is used because PyFlink (practical 7) does not support the newest Python versions.
+   3. Install VS Code from code.visualstudio.com with the default options.
+   4. Install Java 17. Download the JDK 17 .msi installer from adoptium.net (Temurin 17). During the install, open the feature list and switch on Set JAVA_HOME variable.
+   5. Install Maven (for practical 6). Maven has no installer:
+      * Download the "Binary zip archive" from maven.apache.org.
+      * Extract it to C:\maven, so that you have a folder like C:\maven\apache-maven-3.9.x\bin.
+      * Add that bin folder to PATH: press the Windows key, type environment variables, open Edit the system environment variables, click Environment Variables, select Path under "User variables", click Edit > New, paste the bin folder path, and click OK on every window.
+   6. Install sbt (for practical 8). Download the .msi installer from scala-sbt.org and run it with the default options.
+   7. Install the Python libraries. apache-flink is needed only for practical 7 and is the slowest.
+
+      pip install pyspark delta-spark kafka-python requests apache-flink
+
+   8. Add winutils for Spark. Spark on Windows needs two small helper files to write files to disk (practicals 2 and 5):
+      * Open github.com/cdarlint/winutils and go into the newest hadoop-3.3.x folder, then bin.
+      * Download winutils.exe and hadoop.dll and put both in a new folder C:\hadoop\bin.
+      * In PowerShell run setx HADOOP_HOME C:\hadoop
+      * Add C:\hadoop\bin to PATH the same way as in step 5.
+   9. Install Docker Desktop (for practicals 3, 4, 9, 10):
+      * Open PowerShell as administrator (right-click > Run as administrator), run wsl --install, and restart the PC. Docker needs this Windows feature (WSL 2).
+      * Download Docker Desktop for Windows from docker.com and install with the default options.
+      * Open Docker Desktop and accept the terms. When the whale icon near the clock stops moving, Docker is running.
+   10. Check everything in a new PowerShell window. Each command must print a version, not "is not recognized".
+
+      python --version     # Python 3.11.x
+      java -version        # openjdk version "17..."
+      mvn -version         # Apache Maven 3.x
+      sbt --version        # sbt runner version 1.x
+      docker --version     # Docker version ...
+
+   11. Make one parent folder for all practicals:
+
+      mkdir C:\bigdata
+
+HOW TO DO THE COMMON ACTIONS
+----------------------------
+
+Every practical uses the same four actions, so they are explained once here.
+   - Make a folder and open it: in PowerShell run mkdir C:\bigdata\prac1. In VS Code choose File > Open Folder, select that folder and click Select Folder.
+   - Create a file: in the VS Code left panel (Explorer), click the New File icon, type the exact file name with its extension, press Enter. Paste the code and save with Ctrl+S. A white dot on the file tab means it is not saved yet.
+   - Run a command: open Terminal > New Terminal in VS Code. It is a PowerShell window that already starts inside your folder. Type the command and press Enter.
+   - A second terminal: click the + icon at the top right of the terminal panel. Switch between terminals from the list on the right.
+   - Stop a running program: click in its terminal and press Ctrl+C.
+
+On Windows the commands are python and pip (not python3 and pip3). If the PC has several Python versions, type py -3.11 in place of python, and py -3.11 -m pip in place of pip.
+
+Open Docker Desktop before any docker compose command, otherwise you get an error that Docker cannot connect to the engine.
+
+  No. | Topic                      | Tool                       | Language | Needs Docker
+  ----+----------------------------+----------------------------+----------+-------------
+  1   | Data skew and shuffle      | Spark                      | Python   | No
+  2   | ACID and time travel       | Delta Lake on Spark        | Python   | No
+  3   | 3-broker cluster           | Kafka                      | Python   | Yes
+  4   | Schema evolution           | Kafka Schema Registry      | Python   | Yes
+  5   | Live word count            | Spark Structured Streaming | Python   | No
+  6   | Fraud detection with state | Flink                      | Java     | No
+  7   | Watermarks and late data   | Flink (PyFlink)            | Python   | No
+  8   | PageRank                   | Spark GraphX               | Scala    | No
+  9   | Query two sources together | Trino                      | SQL      | Yes
+  10  | Real-time dashboard        | Kafka, ClickHouse, Grafana | Python   | Yes
+
+Every practical below has the same four parts: what it means in simple words, the steps, the easy code, and the output you should see.

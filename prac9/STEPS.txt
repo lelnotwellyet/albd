@@ -1,0 +1,199 @@
+==============================================================================
+PRACTICAL 9: DISTRIBUTED SQL WITH TRINO
+==============================================================================
+
+FILES IN THIS FOLDER (prac9)
+------------------------------
+  docker-compose.yml
+  mysql/init.sql
+  etc/catalog/mysql.properties
+  etc/catalog/memory.properties
+  trino_queries.sql
+  STEPS.txt   <- this file
+
+DEPENDENCIES FOR THIS PRACTICAL (check these first, install what is missing)
+----------------------------------------------------------------------------
+[ ] Docker Desktop
+      Check :  docker --version  and  docker ps   (docker ps must NOT give an engine error)
+      Install:  1. PowerShell as administrator:  wsl --install   then restart the PC
+                2. Download Docker Desktop from https://www.docker.com/products/docker-desktop/
+                3. Install with defaults, open it, accept terms, wait until the whale
+                   icon near the clock stops moving.
+      Docker images (Kafka, MySQL, ...) are downloaded AUTOMATICALLY by
+      "docker compose up" - just keep the internet on.
+
+[ ] Nothing else - MySQL and Trino run inside Docker.
+
+After installing anything: CLOSE VS Code / PowerShell and open it again.
+Full install guide for all practicals: C:\bigdata\00_SETUP_STEPS.txt
+
+Aim: start a Trino coordinator and run one SQL query that joins data from two different sources.
+
+IN SIMPLE WORDS
+---------------
+   - Trino (old name: Presto) is a SQL query engine. It does not store data. It connects to other systems, pulls the data and joins it.
+   - The coordinator is the main Trino server. It receives your SQL, plans it and returns the result.
+   - A connector is a plug that lets Trino talk to one kind of system (MySQL, S3, Kafka, and so on).
+   - A catalog is one connected source. Each catalog is one small .properties file. Table names have three parts: catalog.schema.table, for example mysql.university.students.
+   - A federated query is one SQL query that uses tables from two or more catalogs.
+
+Think of a translator who speaks to two people in two languages and gives you one combined answer.
+
+The two sources here: source 1 is a MySQL database with a students table. Source 2 is Trino's built-in memory connector with a marks table. Your journal shows only the MySQL catalog, and the aim needs two sources. Real S3 needs an extra storage server and a Hive metastore, so the memory connector is the simplest correct second source. In viva, say "S3 would be added the same way, with one more catalog file".
+
+STEPS
+-----
+   1. Start Docker Desktop and confirm docker ps works. Stop any earlier practical with docker compose down in its folder.
+   2. Make the folders.
+
+      mkdir C:\bigdata\prac9\mysql
+      mkdir C:\bigdata\prac9\etc\catalog
+
+   3. Open prac9 in VS Code with File > Open Folder.
+   4. Create four files and paste the matching code from below. The location of each file matters:
+      * docker-compose.yml directly inside prac9 (Code 1)
+      * init.sql inside the mysql folder (Code 2). MySQL runs this file by itself on its first start, which creates the table and the rows.
+      * mysql.properties inside etc\catalog (Code 3). This connects Trino to MySQL.
+      * memory.properties inside etc\catalog (Code 4). This adds the second source.
+   5. Check the structure.
+
+      prac9\
+        docker-compose.yml
+        mysql\init.sql
+        etc\catalog\mysql.properties
+        etc\catalog\memory.properties
+
+   6. Start both containers.
+
+      docker compose up -d
+
+The first time it downloads the MySQL and Trino images, which are large. Allow 5 to 10 minutes. If Docker Desktop asks to share the folder, click Share it.
+   7. Check they are running. docker ps must show trino_mysql and trino_coordinator, both "Up". Screenshot it.
+   8. Wait about 1 minute, then confirm Trino has finished starting. This command must print a line containing SERVER STARTED:
+
+      docker logs trino_coordinator 2>&1 | Select-String "SERVER STARTED"
+
+If it prints nothing, wait 20 seconds and run it again.
+   9. Open the Trino command line.
+
+      docker exec -it trino_coordinator trino
+
+The prompt changes to trino>. You are now typing SQL inside the Trino container.
+   10. Run the queries from "Code 5" one at a time. Paste one statement (right-click pastes in the terminal), make sure it ends with a semicolon, press Enter, and read the result before the next one:
+      * SHOW CATALOGS; lists memory, mysql, system. Two sources are connected.
+      * SELECT * FROM mysql.university.students; shows four students. This data lives in MySQL.
+      * CREATE TABLE memory.default.marks ... prints CREATE TABLE.
+      * INSERT INTO memory.default.marks ... prints INSERT: 4 rows. This data lives in Trino's memory source.
+      * The final SELECT ... JOIN ... shows four rows with name and department from MySQL, and subject and marks from memory. This is the federated query, the main result of the practical.
+   11. Take a screenshot of the SHOW CATALOGS result and of the join result.
+   12. Open the Trino web UI. Go to http://localhost:8080 in Chrome or Edge. Type any username, for example admin, and log in. Tick the Finished box to see the queries you just ran. Click the join query to see its details. Screenshot the page.
+   13. Leave Trino. Type quit and press Enter. The prompt returns to normal.
+   14. Shut down: docker compose down
+
+For the journal: docker ps, SHOW CATALOGS, the join result, and the web UI.
+
+If something goes wrong
+   - Catalog 'mysql' not found (or memory): the .properties file is in the wrong folder or has a spelling mistake. Fix it, then run docker compose restart trino and wait a minute.
+   - Schema 'university' does not exist, or a connection error on the students query: MySQL was still starting. Wait 30 seconds and run the query again.
+   - Trino server is still initializing: wait until step 8 prints SERVER STARTED.
+   - A result ends with (END) or a : and seems stuck: press q to return to the prompt.
+   - The marks table is gone after a restart: the memory source keeps data only while Trino is running. Run the CREATE and INSERT again.
+
+CODE 1 (DOCKER-COMPOSE.YML)
+---------------------------
+
+      services:
+        mysql:
+          image: mysql:8.0
+          container_name: trino_mysql
+          environment:
+            MYSQL_ROOT_PASSWORD: root123
+            MYSQL_DATABASE: university
+          ports:
+            - "3307:3306"
+          volumes:
+            - ./mysql/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      
+        trino:
+          image: trinodb/trino:latest
+          container_name: trino_coordinator
+          ports:
+            - "8080:8080"
+          volumes:
+            - ./etc/catalog:/etc/trino/catalog
+          depends_on:
+            - mysql
+
+The volumes lines copy your files into the containers: init.sql runs automatically when MySQL starts for the first time, and the catalog folder tells Trino which sources exist.
+
+CODE 2 (MYSQL/INIT.SQL): SOURCE 1
+---------------------------------
+
+      CREATE TABLE university.students (
+          student_id INT PRIMARY KEY,
+          student_name VARCHAR(100),
+          department VARCHAR(100)
+      );
+      
+      INSERT INTO university.students VALUES
+      (101, 'Aarav', 'Data Science'),
+      (102, 'Diya', 'Computer Science'),
+      (103, 'Rohan', 'Data Science'),
+      (104, 'Meera', 'Computer Science');
+      
+      CREATE USER IF NOT EXISTS 'trino_user'@'%' IDENTIFIED BY 'trino123';
+      GRANT SELECT ON university.* TO 'trino_user'@'%';
+
+CODE 3 (ETC/CATALOG/MYSQL.PROPERTIES)
+-------------------------------------
+
+      connector.name=mysql
+      connection-url=jdbc:mysql://mysql:3306
+      connection-user=trino_user
+      connection-password=trino123
+
+In the URL, mysql is the service name from the compose file. Containers find each other by service name, not by localhost.
+
+CODE 4 (ETC/CATALOG/MEMORY.PROPERTIES): SOURCE 2
+------------------------------------------------
+
+      connector.name=memory
+
+CODE 5: THE SQL TO TYPE IN TRINO
+--------------------------------
+
+      -- 1. See both sources
+      SHOW CATALOGS;
+      
+      -- 2. Read from source 1 (MySQL)
+      SELECT * FROM mysql.university.students;
+      
+      -- 3. Create and fill a table in source 2 (memory)
+      CREATE TABLE memory.default.marks (student_id INT, subject VARCHAR, marks INT);
+      
+      INSERT INTO memory.default.marks VALUES
+      (101, 'Big Data', 88),
+      (102, 'Big Data', 76),
+      (103, 'Big Data', 91),
+      (104, 'Big Data', 69);
+      
+      -- 4. THE MAIN QUERY: join both sources in one SQL statement
+      SELECT s.student_name, s.department, m.subject, m.marks
+      FROM mysql.university.students AS s
+      JOIN memory.default.marks AS m
+        ON s.student_id = m.student_id
+      ORDER BY m.marks DESC;
+
+OUTPUT YOU SHOULD SEE
+---------------------
+
+SHOW CATALOGS lists memory, mysql and system. The main query returns four rows, with names coming from MySQL and marks coming from the memory source:
+
+       student_name |    department    | subject  | marks
+      --------------+------------------+----------+-------
+       Rohan        | Data Science     | Big Data |    91
+       Aarav        | Data Science     | Big Data |    88
+       Diya         | Computer Science | Big Data |    76
+       Meera        | Computer Science | Big Data |    69
+
+If query 2 says the university schema does not exist, MySQL was still starting. Wait 30 seconds and run it again. This was not test-run here because I have no Docker; files 1 to 3 are your journal's files.
